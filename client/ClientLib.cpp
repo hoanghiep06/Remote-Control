@@ -10,6 +10,14 @@ using namespace std;
 SOCKET clientSocket = INVALID_SOCKET;
 const int SERVER_PORT = 5656;
 
+wstring Utf8ToWstring(const string& str) {
+    if (str.empty()) return wstring();
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+    wstring wstrTo(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+    return wstrTo;
+}
+
 // ==========================================
 //      CÁC HÀM HỖ TRỢ NỘI BỘ 
 // ==========================================
@@ -86,13 +94,6 @@ void receiveImageResponseInternal() {
     file.close();
 }
 
-// Các hàm wrapper cho Console App
-void connectToServer() {
-    string ip;
-    cout << "IP: "; getline(cin, ip);
-    if(ip.empty()) ip = "127.0.0.1";
-    ConnectToIP(ip.c_str());
-}
 void sendCommand(string cmd) { sendCommandInternal(cmd); }
 ProcessMap receiveProcessList(bool isApp) { return receiveProcessListInternal(isApp); }
 void receiveImageResponse() { receiveImageResponseInternal(); }
@@ -108,13 +109,24 @@ DLLEXPORT void InitWinsock() {
     WSAStartup(MAKEWORD(2, 2), &wsa);
 }
 
-DLLEXPORT void ConnectToIP(const char* ip) {
+DLLEXPORT bool ConnectToServer(const char* ip, int port) {
+    if (clientSocket != INVALID_SOCKET) return true; 
+
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr;
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(SERVER_PORT);
+    
+    // Sử dụng Port được truyền vào
+    addr.sin_port = htons(port); 
     addr.sin_addr.s_addr = inet_addr(ip);
-    connect(clientSocket, (sockaddr*)&addr, sizeof(addr));
+    
+    if (connect(clientSocket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        cout << "[LOI] Ket noi that bai toi " << ip << ":" << port << endl;
+        return false;
+    } else {
+        cout << "[OK] Ket noi thanh cong toi " << ip << ":" << port << endl;
+        return true;
+    }
 }
 
 DLLEXPORT void CloseConnection() {
@@ -408,4 +420,117 @@ DLLEXPORT void ExplorePath(const char* path) {
 DLLEXPORT void ShutdownServer() {
     if (clientSocket == INVALID_SOCKET) return;
     sendCommandInternal("SHUTDOWN");
+}
+DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath) {
+    if (clientSocket == INVALID_SOCKET) return;
+
+    // 1. Gửi lệnh yêu cầu tải
+    sendCommandInternal("EXPLORER"); Sleep(100);
+    sendCommandInternal("DOWNLOAD");
+    sendCommandInternal(remotePath); 
+
+    // 2. Nhận kích thước
+    string sizeStr = receiveLine();
+    long long fileSize = 0;
+    try { fileSize = stoll(sizeStr); } catch (...) {}
+
+    if (fileSize <= 0) {
+        sendCommandInternal("QUIT");
+        return;
+    }
+
+    // 3. TẠO FILE VỚI TÊN TIẾNG VIỆT (SỰ KHÁC BIỆT LÀ Ở ĐÂY)
+    // Chuyển chuỗi localPath (đang là UTF-8 từ Python) sang UTF-16
+    wstring wLocalPath = Utf8ToWstring(string(localPath));
+    
+    // Mở file bằng tên UTF-16
+    ofstream file(wLocalPath.c_str(), ios::binary); 
+
+    if (!file.is_open()) {
+        cout << "[LOI] Khong tao duoc file (Ten file loi hoac khong co quyen)." << endl;
+        sendCommandInternal("QUIT");
+        return;
+    }
+
+    // 4. Nhận dữ liệu (Giữ nguyên logic cũ)
+    char buffer[4096];
+    long long remaining = fileSize;
+    
+    // Tăng timeout lên 30s cho chắc
+    DWORD timeout = 30000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    while (remaining > 0) {
+        int bytesToRead = (remaining < 4096) ? (int)remaining : 4096;
+        int r = recv(clientSocket, buffer, bytesToRead, 0);
+        
+        if (r <= 0) break;
+
+        file.write(buffer, r);
+        remaining -= r;
+    }
+
+    file.close();
+    sendCommandInternal("QUIT");
+}
+
+DLLEXPORT void GetInstalledApps() {
+    if (clientSocket == INVALID_SOCKET) return;
+
+    sendCommandInternal("GET_INSTALLED");
+    
+    ofstream file("installed.txt");
+    string countStr = receiveLine();
+    int count = 0;
+    try { count = stoi(countStr); } catch (...) {}
+
+    for (int i = 0; i < count; i++) {
+        string name = receiveLine();
+        file << name << "\n";
+    }
+    file.close();
+    
+}
+
+DLLEXPORT void GetNotificationHistory() {
+    if (clientSocket == INVALID_SOCKET) return;
+
+    sendCommandInternal("GET_NOTI");
+    
+    string sizeStr = receiveLine();
+    long long fileSize = 0;
+    try { fileSize = stoll(sizeStr); } catch (...) {}
+
+    if (fileSize <= 0) {
+        cout << "[LOI] Khong lay duoc Database thong bao (Server gui 0)." << endl;
+        return;
+    }
+
+    cout << "Dang tai DB (" << fileSize << " bytes)..." << endl;
+
+    ofstream file("history.db", ios::binary);
+    if (!file.is_open()) return;
+
+    char* buffer = new char[4096];
+    long long remaining = fileSize;
+    
+    DWORD timeout = 10000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    while (remaining > 0) {
+        int bytesToRead = (remaining < 4096) ? (int)remaining : 4096;
+        int r = recv(clientSocket, buffer, bytesToRead, 0);
+        if (r <= 0) break;
+        file.write(buffer, r);
+        remaining -= r;
+    }
+    
+    // --- QUAN TRỌNG: Đẩy dữ liệu xuống đĩa ---
+    file.flush(); 
+    file.close();
+    // ----------------------------------------
+    
+    delete[] buffer;
+    
+    // Không cần gửi QUIT vì Server hàm này chạy xong tự thoát case
 }

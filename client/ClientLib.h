@@ -32,7 +32,7 @@ void receiveImageResponse();
 //      DANH SÁCH HÀM XUẤT KHẨU CHO PYTHON
 // ==================================================
 DLLEXPORT void InitWinsock();
-DLLEXPORT void ConnectToIP(const char* ip);
+DLLEXPORT bool ConnectToServer(const char* ip, int port);
 DLLEXPORT void CloseConnection();
 
 // Hàm gửi lệnh chung
@@ -56,3 +56,7 @@ DLLEXPORT void ShutdownServer();    // Tắt máy Server
 
 DLLEXPORT void GetDrives();
 DLLEXPORT void ExplorePath(const char* path);
+DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
+
+DLLEXPORT void GetInstalledApps();
+DLLEXPORT void GetNotificationHistory();

