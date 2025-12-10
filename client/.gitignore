@@ -1,0 +1,23 @@
+# C# Build files
+bin/
+obj/
+.vs/
+*.user
+
+# C++ Build files
+*.exe
+*.dll
+*.o
+*.obj
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data files (Video, ảnh, log)
+*.jpg
+*.png
+*.bmp
+*.avi
+*.txt
+!requirements.txt
