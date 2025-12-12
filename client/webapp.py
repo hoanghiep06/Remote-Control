@@ -445,8 +445,13 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
     # --- Thay thế toàn bộ method do_GET bằng đoạn này ---
     def do_GET(self):
         global webcam_running
+        
+        if self.path == '/':
+            # Chỉ định file cần mở là index.html trong thư mục templates
+            self.path = '/templates/index.html'
+            
         # --- API: lấy danh sách apps (gọi GetAppList + chờ apps.txt) ---
-        if self.path == '/api/mode':
+        elif self.path == '/api/mode':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
