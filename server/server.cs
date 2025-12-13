@@ -421,7 +421,7 @@ namespace server
             {
                 // 1. GIỚI HẠN FPS (Chỉ gửi 10 hình/giây = 100ms/hình)
                 // Nếu chưa đủ 100ms từ lần gửi trước thì bỏ qua ngay
-                if ((DateTime.Now - lastSendTime).TotalMilliseconds < 100) return;
+                if ((DateTime.Now - lastSendTime).TotalMilliseconds < 38) return;
                 lastSendTime = DateTime.Now;
 
                 // 2. RESIZE ẢNH (Thu nhỏ để gửi cho nhanh)
@@ -1099,7 +1099,7 @@ namespace server
                             Program.nw.Flush();
                         }
                         
-                        Thread.Sleep(50);
+                        Thread.Sleep(25);
                     }
                     catch (Exception ex) 
                     { 

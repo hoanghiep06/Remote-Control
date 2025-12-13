@@ -23,13 +23,52 @@
     <div class="moon"></div>
     <div class="star-container" id="starContainer"></div>
 
+
+    <div class="snow-container" id="snowContainer"></div>
+
+    <div class="magic-gift-container" id="giftContainer"></div>
+
+    <div class="css-grass-container">
+        <div class="grass-blades"></div>
+    </div>
+
+    <div class="css-tree-container">
+        <div class="shadow-ground"></div> <div class="trunk"></div>
+        
+        <div class="tree-layer l4"></div>
+        <div class="tree-layer l3"></div>
+        <div class="tree-layer l2"></div>
+        <div class="tree-layer l1"></div>
+        
+        <div class="tree-snow-overlay" id="treeSnow">
+            <div class="ts-layer l4"></div>
+            <div class="ts-layer l3"></div>
+            <div class="ts-layer l2"></div>
+            <div class="ts-layer l1"></div>
+        </div>
+
+        <div class="ornament o1"></div>
+        <div class="ornament o2"></div>
+        <div class="ornament o3"></div>
+        <div class="ornament o4"></div>
+        <div class="star-top">⭐</div>
+    </div>
+
+    <div class="css-ground-snow" id="groundSnow"></div>
+
+    <div class="css-scene-day" id="sceneDay"></div>
+
+    <div class="scene-night-snow" id="sceneNight">
+    </div>
+
     <button class="theme-toggle" onclick="toggleTheme()">🌙 Chế độ Đêm</button>
 
     <div id="loginSection">
-        <div style="font-size: 3.5rem; margin-bottom: 10px;" id="iconStatus">🌤️</div>
+        
         <h2 id="statusTitle">Smart Connect</h2>
-        <p style="opacity: 0.8; font-size: 0.9rem;" id="statusDesc">Sẵn sàng kết nối máy chủ.</p>
+        <p style="opacity: 0.8; font-size: 0.9rem; margin-bottom: 20px;" id="statusDesc">Sẵn sàng kết nối máy chủ.</p>
 
+        
         <div class="input-group">
             <div class="input-wrapper" style="flex: 2;">
                 <div class="input-label">IP Address</div>
@@ -44,6 +83,7 @@
         <button class="action-btn connect" id="mainBtn" onclick="handleConnection()">Kết nối ngay</button>
     </div>
 
+
     <div id="appSection">
         
         <svg class="svg-vine" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
@@ -55,37 +95,52 @@
         </svg>
 
         <div class="dash-header">
-            <div>
+            <div style="cursor: pointer;" onclick="goHome()" title="Về trang chủ">
                 <h2 style="margin: 0; color: #a7f3d0;">Khu Vườn IoT</h2>
                 <small style="opacity: 0.8; color: #d1fae5;">Hệ thống giám sát • <span id="clock">00:00</span></small>
             </div>
-            <button onclick="logout()" class="btn-nature danger">Thoát</button>
-        </div>
+            </div>
+
 
         <div class="grid-menu">
             <div class="menu-item" onclick="switchMode('webcam')">
-                <div class="icon">🎥</div> <span>Webcam</span>
+                <div class="icon">🎥</div> 
+                <span>Webcam</span>
+                <p class="desc">Xem trực tiếp & Ghi hình Camera</p>
             </div>
             <div class="menu-item" onclick="switchMode('screen')">
-                <div class="icon">🖥️</div> <span>Màn hình</span>
+                <div class="icon">🖥️</div> 
+                <span>Màn hình</span>
+                <p class="desc">Giám sát thao tác Desktop thời gian thực</p>
             </div>
             <div class="menu-item" onclick="switchMode('keylogger')">
-                <div class="icon">⌨️</div> <span>Keylogger</span>
+                <div class="icon">⌨️</div> 
+                <span>Keylogger</span>
+                <p class="desc">Ghi lại lịch sử phím bấm & Clipboard</p>
             </div>
             <div class="menu-item" onclick="switchMode('notify')">
-                <div class="icon">🔔</div> <span>Thông báo</span>
+                <div class="icon">🔔</div> 
+                <span>Thông báo</span>
+                <p class="desc">Đọc thông báo từ Zalo, Messenger...</p>
             </div>
             <div class="menu-item" onclick="switchMode('files')">
-                <div class="icon">📂</div> <span>File Manager</span>
+                <div class="icon">📂</div> 
+                <span>File Manager</span>
+                <p class="desc">Duyệt file, xem ổ đĩa & Tải dữ liệu</p>
             </div>
             <div class="menu-item" onclick="switchMode('apps')">
-                <div class="icon">🚀</div> <span>Apps chạy</span>
+                <div class="icon">🚀</div> 
+                <span>Apps chạy</span>
+                <p class="desc">Quản lý & Tắt ứng dụng đang mở</p>
             </div>
             <div class="menu-item" onclick="switchMode('process')">
-                <div class="icon">⚙️</div> <span>Processes</span>
+                <div class="icon">⚡</div> 
+                <span>Processes</span>
+                <p class="desc">Xem tiến trình hệ thống & Mở App</p>
             </div>
             <div class="menu-item" onclick="switchMode('custom')">
-                <div class="icon">✨</div> <span>Tùy chọn</span>
+                <div class="icon">⚙️</div> 
+                <span>Hệ thống</span> <p class="desc">Tắt máy, Khởi động lại & Đăng xuất</p>
             </div>
         </div>
 
@@ -99,6 +154,22 @@
             <path d="M0,60 L0,20 Q20,0 40,40 T80,30 T120,50 T160,10 T200,50 T240,20 T280,60 T320,10 T360,50 T400,20 T440,60 T480,0 T520,50 T560,20 T600,60 T640,10 T680,50 T720,20 T760,60 T800,10 T840,50 T880,20 T920,60 T960,10 T1000,50 T1040,20 T1080,60 T1120,10 T1160,50 L1200,20 L1200,60 Z" fill="#14532d" opacity="0.9"/>
             <path d="M0,60 L0,40 Q30,60 60,50 T120,60 T180,50 T240,60 T300,50 T360,60 T420,50 T480,60 T540,50 T600,60 T660,50 T720,60 T780,50 T840,60 T900,50 T960,60 T1020,50 T1080,60 T1140,50 L1200,60 L1200,60 Z" fill="#166534" opacity="0.8"/>
         </svg>
+    </div>
+
+    <div id="transitionScreen" style="display: none;">
+        <div id="transIcon" class="status-icon bouncing">🌱</div>
+        
+        <h2 id="transTitle" style="color: #86efac; margin: 10px 0;">Đang kết nối...</h2>
+        <p id="transDesc" style="color: #d1fae5; font-size: 0.9rem; margin-bottom: 30px;">Vui lòng đợi phản hồi từ máy chủ</p>
+
+        <div class="project-info">
+            <div class="pj-subject">Đồ Án Môn Mạng Máy Tính</div>
+            <div class="pj-school">Trường Đại học Khoa học Tự Nhiên</div>
+            <div class="pj-row">
+                <span class="pj-badge">Lớp 24TNT1</span>
+                <span class="pj-name">Mai Hoàng Hiệp - 24122015</span>
+            </div>
+        </div>
     </div>
 
     <script src="/static/script.js"></script>

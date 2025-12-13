@@ -164,3 +164,763 @@ body.dark-mode .sun-container { display: none; }
 
 .svg-vine { position: absolute; top: -10px; right: -10px; width: 150px; z-index: 1; opacity: 0.8; pointer-events: none; }
 .svg-grass { position: absolute; bottom: -5px; left: 0; width: 100%; height: auto; z-index: 1; opacity: 0.9; pointer-events: none; }
+
+
+/* --- CSS CHO GIAO DIỆN 2 TRẠNG THÁI (DASHBOARD & FEATURE) --- */
+
+/* 1. Trạng thái Mặc định (Dashboard Toàn màn hình) */
+#appSection {
+    transition: all 0.5s ease;
+}
+
+/* Ẩn khung nội dung khi chưa chọn tính năng */
+#appSection:not(.feature-active) #dynamicContent {
+    display: none;
+}
+
+/* Menu lúc bình thường: To, nằm giữa, chiếm không gian */
+#appSection:not(.feature-active) .grid-menu {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 25px;
+    margin-top: 40px;
+    height: 60%; /* Chiếm phần lớn chiều cao */
+    align-content: center;
+}
+
+#appSection:not(.feature-active) .menu-item {
+    height: 140px; /* Card to */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.08);
+    font-size: 1.1rem;
+    border: 1px solid rgba(255,255,255,0.15);
+}
+#appSection:not(.feature-active) .menu-item .icon {
+    font-size: 3rem; /* Icon to */
+    margin-bottom: 15px;
+}
+
+/* 2. Trạng thái Khi chọn tính năng (Class .feature-active) */
+
+/* Menu thu nhỏ lại, bay lên góc phải */
+#appSection.feature-active .grid-menu {
+    display: flex; /* Xếp hàng ngang */
+    position: absolute;
+    top: 25px;
+    right: 100px; /* Cách nút Thoát một chút */
+    gap: 8px;
+    margin: 0;
+    z-index: 10;
+}
+
+#appSection.feature-active .menu-item {
+    padding: 5px 10px;
+    height: auto;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.1);
+    flex-direction: row; /* Icon nằm ngang với chữ */
+    gap: 5px;
+}
+#appSection.feature-active .menu-item:hover {
+    background: #22c55e;
+}
+
+#appSection.feature-active .menu-item .icon {
+    font-size: 1rem; /* Icon nhỏ lại */
+    margin: 0;
+}
+#appSection.feature-active .menu-item span {
+    font-size: 0.8rem; /* Chữ nhỏ lại */
+    display: none; /* Ẩn bớt chữ nếu muốn gọn, hoặc để block nếu muốn hiện */
+}
+/* Hiện chữ khi hover vào menu nhỏ */
+#appSection.feature-active .menu-item:hover span {
+    display: block;
+}
+
+/* Hiện khung nội dung lấp đầy khoảng trống */
+#appSection.feature-active #dynamicContent {
+    display: flex;
+    flex: 1;
+    margin-top: 10px;
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+
+/* --- CẬP NHẬT GIAO DIỆN DASHBOARD (LẤP LÁNH & MÔ TẢ) --- */
+
+/* 1. Style cho dòng mô tả mới */
+.menu-item .desc {
+    font-size: 0.75rem;
+    color: #a7f3d0;
+    opacity: 0.7;
+    margin: 5px 0 0 0;
+    font-weight: 300;
+    max-width: 80%;
+    line-height: 1.3;
+}
+
+/* 2. Điều chỉnh lại ô Menu Dashboard (To ra xíu để chứa mô tả) */
+#appSection:not(.feature-active) .menu-item {
+    height: 160px; /* Tăng chiều cao */
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    position: relative;
+    overflow: hidden; /* Quan trọng cho hiệu ứng ánh sáng */
+    transition: all 0.3s ease;
+    backdrop-filter: blur(5px);
+}
+
+/* 3. HIỆU ỨNG LẤP LÁNH (SHIMMER EFFECT) */
+#appSection:not(.feature-active) .menu-item::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        120deg, 
+        transparent, 
+        rgba(255, 255, 255, 0.1) 40%, 
+        rgba(255, 255, 255, 0.3) 50%, 
+        rgba(255, 255, 255, 0.1) 60%, 
+        transparent
+    );
+    transition: 0.5s;
+}
+
+/* Khi di chuột vào: Ánh sáng quét qua + Nổi lên + Sáng viền */
+#appSection:not(.feature-active) .menu-item:hover {
+    transform: translateY(-5px) scale(1.02);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: #4ade80; /* Viền xanh lá sáng */
+    box-shadow: 0 10px 30px rgba(74, 222, 128, 0.2); /* Đổ bóng xanh */
+}
+
+#appSection:not(.feature-active) .menu-item:hover::before {
+    left: 100%; /* Quét ánh sáng từ trái qua phải */
+    transition: 0.7s;
+}
+
+/* Icon cũng phát sáng khi hover */
+#appSection:not(.feature-active) .menu-item:hover .icon {
+    transform: scale(1.1);
+    filter: drop-shadow(0 0 10px rgba(255,255,255,0.8));
+    transition: 0.3s;
+}
+
+/* 4. XỬ LÝ KHI MENU THU NHỎ (Active Mode) */
+/* Khi menu bay lên góc phải, ẩn dòng mô tả đi cho gọn */
+#appSection.feature-active .menu-item .desc {
+    display: none;
+}
+
+/* Menu nhỏ thì bỏ hiệu ứng lấp lánh rườm rà, chỉ giữ hover nhẹ */
+#appSection.feature-active .menu-item::before {
+    display: none;
+}
+#appSection.feature-active .menu-item {
+    height: auto;
+    padding: 8px 12px;
+}
+
+/* --- STYLE CHO POWER MENU (CUSTOM DASHBOARD) --- */
+.power-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 25px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+
+/* Hiệu ứng Hover chung */
+.power-card:hover {
+    transform: translateY(-5px);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+}
+
+/* Màu riêng cho từng nút */
+/* 1. Restart (Xanh dương/Cyan) */
+.power-card:hover .p-icon { transform: rotate(180deg); } /* Xoay icon khi hover */
+
+/* 2. Shutdown (Đỏ - Danger) */
+.power-card.danger:hover {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+}
+.power-card.danger .p-icon { color: #fca5a5; }
+.power-card.danger:hover .p-title { color: #ef4444; }
+
+/* 3. Logout (Xám/Trắng - Logout) */
+.power-card.logout:hover {
+    background: rgba(148, 163, 184, 0.2);
+    border-color: #cbd5e1;
+}
+
+/* Typography bên trong nút */
+.p-icon {
+    font-size: 3rem;
+    margin-bottom: 15px;
+    transition: 0.4s;
+}
+.p-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: #e2e8f0;
+}
+.p-desc {
+    font-size: 0.8rem;
+    color: #94a3b8;
+    font-weight: 300;
+}
+
+/* --- CSS VẼ HÌNH (NO IMAGES) --- */
+
+/* 1. BÃI CỎ (CSS GRADIENT) */
+.css-grass-container {
+    position: absolute; bottom: 0; left: 0; width: 100%; height: 100px;
+    background: linear-gradient(to top, #14532d 0%, #22c55e 100%);
+    z-index: 1; pointer-events: none;
+    transition: filter 3s ease; /* Chuyển màu khi tối trời */
+}
+/* Khi ban đêm, cỏ tối đi */
+body.dark-mode .css-grass-container {
+    filter: brightness(0.4) saturate(0.8);
+}
+
+/* 2. CÂY THÔNG (CSS BORDER TRICKS) */
+.css-tree-container {
+    position: absolute; bottom: 40px; left: 5%; 
+    width: 140px; height: 240px; /* Cây cao */
+    z-index: 5;
+    filter: drop-shadow(5px 5px 10px rgba(0,0,0,0.2));
+}
+
+.trunk { 
+    position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 26px; height: 40px; background: #5d4037; border-radius: 2px;
+}
+.shadow-ground {
+    position: absolute; bottom: -5px; left: 50%; transform: translateX(-50%);
+    width: 100px; height: 15px; background: rgba(0,0,0,0.3);
+    border-radius: 50%; filter: blur(5px); z-index: -1;
+}
+
+/* Vẽ lá cây bằng hình tam giác */
+.tree-layer { 
+    position: absolute; left: 50%; transform: translateX(-50%);
+    width: 0; height: 0; border-style: solid;
+}
+/* Màu xanh đậm dần xuống dưới */
+.tree-layer.l4 { bottom: 30px; border-width: 0 65px 70px 65px; border-color: transparent transparent #14532d transparent; z-index: 1; }
+.tree-layer.l3 { bottom: 70px; border-width: 0 55px 60px 55px; border-color: transparent transparent #15803d transparent; z-index: 2; }
+.tree-layer.l2 { bottom: 105px; border-width: 0 45px 50px 45px; border-color: transparent transparent #16a34a transparent; z-index: 3; }
+.tree-layer.l1 { bottom: 135px; border-width: 0 35px 45px 35px; border-color: transparent transparent #22c55e transparent; z-index: 4; }
+
+/* Đảm bảo lớp tuyết nằm đè lên lớp lá xanh */
+.tree-snow-overlay { 
+    opacity: 0; 
+    transition: opacity 1s ease; 
+    pointer-events: none; 
+    z-index: 10; /* Tăng Z-index để không bị lá che */
+}
+/* Màu tuyết trắng tinh khôi, viền rõ ràng */
+.ts-layer { 
+    position: absolute; left: 50%; transform: translateX(-50%); 
+    width: 0; height: 0; border-style: solid; 
+    /* Thêm bóng đổ nhẹ để tuyết có độ nổi khối 3D trên lá */
+    filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
+}
+/* Canh chỉnh vị trí từng tầng tuyết cho khớp ngọn cây */
+.ts-layer.l4 { 
+    bottom: 32px; /* Hạ thấp xuống sát lá xanh */
+    border-width: 0 60px 60px 60px; /* To bè ra */
+    border-color: transparent transparent #ffffff transparent; 
+}
+
+/* Tầng 3 - Lá xanh bottom: 70px */
+.ts-layer.l3 { 
+    bottom: 72px; 
+    border-width: 0 50px 50px 50px; 
+    border-color: transparent transparent #ffffff transparent; 
+}
+
+/* Tầng 2 - Lá xanh bottom: 105px */
+.ts-layer.l2 { 
+    bottom: 107px; 
+    border-width: 0 40px 40px 40px; 
+    border-color: transparent transparent #ffffff transparent; 
+}
+
+/* Tầng 1 (Ngọn) - Lá xanh bottom: 135px */
+.ts-layer.l1 { 
+    bottom: 137px; 
+    border-width: 0 30px 35px 30px; 
+    border-color: transparent transparent #ffffff transparent; 
+}
+/* Ngôi sao & Đồ trang trí */
+.star-top { 
+    position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
+    font-size: 26px; z-index: 10; animation: twinkle 1s infinite alternate; text-shadow: 0 0 10px gold;
+}
+.ornament { 
+    position: absolute; width: 10px; height: 10px; border-radius: 50%; z-index: 9;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.3); animation: blink 2s infinite; 
+}
+.o1 { bottom: 45px; left: 25px; background: #ef4444; }
+.o2 { bottom: 85px; right: 40px; background: #fbbf24; }
+.o3 { bottom: 115px; left: 50px; background: #3b82f6; }
+.o4 { bottom: 145px; right: 60px; background: #ec4899; }
+@keyframes blink { 50% { filter: brightness(1.5); box-shadow: 0 0 5px white; } }
+
+/* 3. LỚP TUYẾT NỀN (CHE CỎ) */
+.css-ground-snow {
+    position: absolute; bottom: 0; left: 0; width: 100%; height: 110px;
+    background: linear-gradient(to top, #fff 50%, rgba(255,255,255,0.8) 80%, transparent 100%);
+    z-index: 4; opacity: 0; pointer-events: none;
+    transition: opacity 2s ease, filter 2s ease;
+}
+/* Khi tối trời, tuyết nền xám lại */
+body.dark-mode .css-ground-snow {
+    filter: brightness(0.6) sepia(0.2) hue-rotate(180deg);
+}
+
+/* 4. NGƯỜI TUYẾT (VẼ HÌNH TRÒN) */
+.css-scene-day {
+    position: absolute; bottom: 50px; right: 10%; z-index: 5;
+    opacity: 0; transition: opacity 1s;
+}
+.snowman { position: relative; display: flex; flex-direction: column; align-items: center; }
+.snowman .body { width: 60px; height: 60px; background: white; border-radius: 50%; box-shadow: inset -5px -5px 15px #cbd5e1; z-index: 1; }
+.snowman .head { width: 40px; height: 40px; background: white; border-radius: 50%; margin-bottom: -8px; position: relative; box-shadow: inset -3px -3px 10px #cbd5e1; z-index: 2; }
+.snowman .nose { position: absolute; top: 18px; left: 18px; width: 0; height: 0; border-left: 10px solid orange; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transform: rotate(10deg); }
+.snowman .eye { position: absolute; top: 14px; width: 4px; height: 4px; background: #333; border-radius: 50%; }
+.eye.left { left: 12px; } .eye.right { left: 24px; }
+.snowman .arm { position: absolute; width: 30px; height: 3px; background: #5d4037; top: 30px; z-index: 0; }
+.arm.left { left: -25px; transform: rotate(20deg); }
+.arm.right { right: -25px; transform: rotate(-20deg); }
+
+/* --- SỬA BÔNG TUYẾT (RÕ HƠN) --- */
+.snow-container {
+    position: absolute; width: 100%; height: 100%; top: 0; left: 0;
+    pointer-events: none; z-index: 10; /* Tăng Z-index lên cao nhất để thấy rõ */
+    display: none;
+}
+.snowflake {
+    position: absolute;
+    background: #fff; /* Màu trắng tinh */
+    border-radius: 50%;
+    box-shadow: 0 0 5px rgba(255,255,255,0.8); /* Phát sáng nhẹ để dễ thấy */
+    opacity: 0.9; 
+    animation: fallSnow linear infinite;
+}
+@keyframes fallSnow {
+    0% { transform: translateY(-10vh) translateX(0); }
+    100% { transform: translateY(110vh) translateX(20px); }
+}
+
+/* --- SỬA CỤC TUYẾT (LĂN THẲNG TẮP) --- */
+.scene-night-snow {
+    position: absolute; bottom: 35px; width: 100%; height: 150px;
+    z-index: 6; overflow: hidden; pointer-events: none;
+}
+
+/* Wrapper: Chỉ chịu trách nhiệm đi ngang và to lên (Không xoay) */
+.rolling-wrapper {
+    position: absolute; bottom: 0; left: -100px;
+    width: 40px; height: 40px;
+    /* To lên từ đáy giữa -> Không bị mất chân, không bị chao đảo */
+    transform-origin: bottom center;
+    /* Animation di chuyển */
+    animation: moveAndGrow 8s ease-in forwards;
+}
+
+/* Inner: Chỉ chịu trách nhiệm xoay tròn tại chỗ */
+.rolling-inner {
+    width: 100%; height: 100%;
+    border-radius: 50%;
+    /* Màu cầu tuyết */
+    background: radial-gradient(circle at 30% 30%, #fff, #cbd5e1);
+    box-shadow: 2px 5px 15px rgba(0,0,0,0.3);
+    /* Animation xoay */
+    animation: spinOnly 8s linear infinite;
+}
+
+/* Keyframes mới: Tách biệt chuyển động */
+@keyframes moveAndGrow {
+    0% { 
+        left: -50px; 
+        transform: scale(0.6); /* Bắt đầu nhỏ */
+    }
+    100% { 
+        left: 110%; /* Chạy tít sang phải */
+        transform: scale(2.5); /* Kết thúc to đùng */
+    }
+}
+
+@keyframes spinOnly {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(1080deg); } /* Xoay 3 vòng */
+}
+
+
+/* --- HIỆU ỨNG QUÀ GIÁNG SINH RƠI (MAGIC DROP) --- */
+.magic-gift-container {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 7; overflow: hidden;
+}
+
+.falling-item {
+    position: absolute;
+    top: 0px;
+    z-index: 5;
+    font-size: 2rem; /* Kích thước quà */
+    filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
+    opacity: 0;
+    /* Animation: Rơi xuống -> Dừng lại chút -> Mờ dần */
+    animation: giftDropFade 4s ease-in forwards;
+}
+
+/* Hiệu ứng tuyết rơi kèm quà (khác tuyết thường) */
+.falling-magic-snow {
+    position: absolute;
+    color: #fff;       /* Màu trắng */
+    font-size: 20px;   /* Kích thước cơ bản */
+    line-height: 1;
+    
+    /* Hiệu ứng phát sáng lấp lánh */
+    text-shadow: 0 0 5px #fff, 0 0 10px #a5f3fc; 
+    
+    /* Animation: Rơi xoay vòng */
+    animation: magicSnowFall 5s linear forwards;
+    opacity: 0;
+}
+
+@keyframes magicSnowFall {
+    0% { 
+        transform: translateY(-50px) rotate(0deg) scale(0.8); 
+        opacity: 0; 
+    }
+    10% { opacity: 1; } /* Hiện nhanh */
+    
+    100% { 
+        /* Rơi xuống đất + Xoay 360 độ */
+        transform: translateY(90vh) rotate(360deg) scale(1.2); 
+        opacity: 0; /* Mờ dần khi chạm đất */
+    }
+}
+
+
+@keyframes giftDropFade {
+    0% { 
+        transform: translateY(-60px) rotate(0deg); 
+        opacity: 1; 
+    }
+    
+    /* Giai đoạn rơi: Từ trời xuống đất (chiếm 60% thời gian) */
+    60% { 
+        /* Rơi xuống sát đất (cách đáy 50px) */
+        transform: translateY(calc(100vh - 50px)) rotate(360deg); 
+        opacity: 1; 
+    }
+    
+    /* Giai đoạn nằm yên trên đất (chiếm 20% thời gian) */
+    80% {
+        transform: translateY(calc(100vh - 50px)) rotate(360deg); 
+        opacity: 1; 
+    }
+
+    /* Giai đoạn biến mất */
+    100% { 
+        transform: translateY(calc(100vh - 50px)) rotate(360deg); 
+        opacity: 0; 
+    }
+}
+
+/* --- HIỆU ỨNG SẤM CHỚP & MƯA --- */
+
+/* 1. Màn chớp sáng (Lightning Flash) */
+.flash-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: white;
+    opacity: 0;
+    z-index: 999; /* Đè lên tất cả */
+    pointer-events: none;
+}
+/* Class kích hoạt chớp */
+.flash-overlay.active {
+    animation: lightningFlash 0.2s ease-out;
+}
+@keyframes lightningFlash {
+    0% { opacity: 0; }
+    10% { opacity: 0.8; } /* Sáng lòa */
+    100% { opacity: 0; }
+}
+
+/* --- BỔ SUNG: TIA SÉT ĐÁNH XUỐNG --- */
+#lightningContainer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 8; overflow: hidden;
+}
+
+.lightning-bolt {
+    position: absolute;
+    top: -50px;
+    width: 80px; height: 500px;
+    
+    /* 1. Đổi màu lõi thành vàng nhạt */
+    background: #fef08a; 
+    
+    /* Giữ nguyên hình dáng ziczac */
+    clip-path: polygon(45% 0, 70% 0, 40% 40%, 60% 40%, 20% 100%, 40% 55%, 20% 55%);
+    opacity: 0;
+    
+    /* 2. Đổi màu phát sáng thành vàng đậm hơn */
+    filter: drop-shadow(0 0 20px #eab308); 
+    
+    animation: strike 0.3s ease-out;
+}
+
+@keyframes strike {
+    0% { opacity: 0; transform: translateY(-50px) scaleX(0.5); }
+    20% { opacity: 1; transform: translateY(0) scaleX(1); }
+    100% { opacity: 0; transform: translateY(0) scaleX(1); }
+}
+
+/* 2. Tinh chỉnh Hạt Mưa (Khác hạt tuyết) */
+/* Tuyết: Tròn, bay chậm, lơ lửng */
+.snowflake {
+    border-radius: 50%; background: white;
+    filter: blur(1px);
+}
+
+/* Mưa: Dài, rơi thẳng, rất nhanh, màu xanh nhạt */
+.raindrop {
+    position: absolute;
+    background: rgba(174, 194, 224, 0.8); /* Màu nước */
+    width: 2px; height: 25px; /* Dài hơn */
+    top: -30px;
+    animation: fallRain linear infinite;
+}
+@keyframes fallRain {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(110vh); }
+}
+
+/* 3. Bầu trời khi Sấm chớp */
+body.storm-active {
+    /* Tối sầm lại màu xám chì */
+    background: linear-gradient(to bottom, #1e293b, #334155, #475569) !important;
+}
+
+
+/* --- CSS CHO THÔNG TIN ĐỒ ÁN & HIỆU ỨNG LOADING --- */
+
+/* 1. Icon trạng thái to */
+.status-icon {
+    font-size: 3.5rem;
+    margin-bottom: 10px;
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    display: inline-block;
+}
+
+/* Hiệu ứng nhảy nhót (Bouncing) */
+.status-icon.bouncing {
+    animation: bounceIcon 0.6s infinite alternate;
+}
+@keyframes bounceIcon {
+    from { transform: translateY(0) scale(1); }
+    to { transform: translateY(-15px) scale(1.1); }
+}
+
+/* 2. Thẻ Thông tin Đồ án (Glassmorphism) */
+.project-info {
+    background: rgba(255, 255, 255, 0.15); /* Nền mờ */
+    border: 1px solid rgba(255, 255, 255, 0.3); /* Viền sáng */
+    border-radius: 16px;
+    padding: 15px;
+    margin-bottom: 20px;
+    text-align: center;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+}
+/* Dark mode cho thẻ info */
+body.dark-mode .project-info {
+    background: rgba(0, 0, 0, 0.2);
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* Typography đẹp */
+.pj-subject {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #2563eb; /* Xanh dương nổi bật */
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+body.dark-mode .pj-subject { color: #60a5fa; }
+
+.pj-school {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #475569;
+    margin-bottom: 12px;
+}
+body.dark-mode .pj-school { color: #cbd5e1; }
+
+.pj-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.pj-badge {
+    background: #22c55e;
+    color: white;
+    font-size: 0.75rem;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.pj-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #334155;
+}
+body.dark-mode .pj-name { color: #e2e8f0; }
+
+
+/* --- CSS CHO MÀN HÌNH CHỜ (TRANSITION SCREEN) --- */
+#transitionScreen {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(15, 23, 42, 0.95); /* Màu tối đậm để che hết bên dưới */
+    backdrop-filter: blur(20px);
+    z-index: 9999; /* Cao nhất để đè lên tất cả */
+    flex-direction: column; justify-content: center; align-items: center;
+    color: white;
+    transition: opacity 0.5s ease; /* Hiệu ứng mờ dần khi tắt */
+}
+#transitionScreen.active { display: flex; }
+
+/* Icon trạng thái to & nhảy */
+.status-icon { font-size: 5rem; margin-bottom: 20px; }
+.status-icon.bouncing { animation: bounceIcon 0.6s infinite alternate; }
+@keyframes bounceIcon { from { transform: translateY(0); } to { transform: translateY(-20px); } }
+
+/* Thẻ Thông tin Đồ án */
+.project-info {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 16px; padding: 25px 40px; text-align: center;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    animation: zoomIn 0.5s ease;
+}
+@keyframes zoomIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.pj-subject { font-weight: 700; font-size: 1.3rem; color: #60a5fa; margin-bottom: 5px; text-transform: uppercase; }
+.pj-school { font-size: 1.1rem; color: #cbd5e1; margin-bottom: 15px; }
+.pj-row { display: flex; gap: 15px; justify-content: center; align-items: center; }
+.pj-badge { background: #22c55e; color: white; padding: 4px 10px; border-radius: 10px; font-weight: 600; font-size: 0.9rem; }
+.pj-name { font-size: 1.1rem; font-weight: 600; color: #f1f5f9; }
+
+
+/* --- CSS CHO CHỨC NĂNG GHI HÌNH --- */
+
+/* 1. Biểu tượng "Đang ghi" trên màn hình (REC indicator) */
+.rec-indicator {
+    position: absolute;
+    top: 20px; left: 20px; /* Chuyển sang trái */
+    right: auto; /* Bỏ canh phải cũ */
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(239, 68, 68, 0.8); /* Nền đỏ rõ hơn */
+    padding: 6px 12px;
+    border-radius: 20px;
+    color: white; font-weight: bold; font-size: 0.9rem;
+    z-index: 10;
+    opacity: 0; transition: opacity 0.3s ease;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+}
+
+/* Chấm đỏ nhấp nháy */
+.rec-dot {
+    width: 12px; height: 12px;
+    background-color: #ef4444; /* Màu đỏ */
+    border-radius: 50%;
+}
+
+/* Khi class 'recording' được thêm vào container cha */
+.cam-frame.recording .rec-indicator {
+    opacity: 1; /* Hiện lên */
+}
+.cam-frame.recording .rec-dot {
+    animation: pulseRed 1s infinite alternate; /* Nhấp nháy */
+}
+
+@keyframes pulseRed {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* 2. CONTAINER CHO CÁC NÚT GÓC PHẢI */
+.top-right-controls {
+    position: absolute;
+    top: 15px; right: 15px;
+    display: flex;
+    flex-direction: column; /* Xếp dọc cho gọn */
+    gap: 15px;
+    z-index: 20; /* Nằm trên video và trên cả indicator */
+}
+
+/* 3. STYLE CHO NÚT ICON TRÒN */
+.icon-btn {
+    width: 50px; height: 50px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.4); /* Nền đen mờ */
+    color: white;
+    font-size: 1.5rem;
+    display: flex; justify-content: center; align-items: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    backdrop-filter: blur(5px); /* Hiệu ứng kính mờ */
+}
+
+.icon-btn:hover {
+    background: rgba(0, 0, 0, 0.7);
+    transform: scale(1.1);
+}
+
+/* Nút ghi hình đặc biệt */
+.icon-btn.record-btn {
+    color: #ef4444; /* Icon màu đỏ */
+    background: rgba(255, 255, 255, 0.9); /* Nền trắng nổi bật */
+}
+
+/* Trạng thái KHI ĐANG GHI của nút nút đó */
+.icon-btn.record-btn.recording {
+    background: #ef4444 !important; /* Nền đỏ */
+    color: white !important; /* Icon trắng */
+    box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.3); /* Hiệu ứng viền */
+}
+/* Khi đang ghi thì đổi icon thành hình vuông (Stop) */
+.icon-btn.record-btn.recording::before {
+    content: "⏹️"; /* Icon Dừng */
+    font-size: 1.2rem;
+}
+/* Ẩn icon cũ đi khi đang ghi */
+.icon-btn.record-btn.recording span { display: none; }

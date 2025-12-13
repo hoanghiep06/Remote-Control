@@ -1,66 +1,64 @@
-#pragma once
-#include <winsock2.h>
+#ifndef CLIENTLIB_H
+#define CLIENTLIB_H
+
 #include <string>
 #include <vector>
 #include <map>
+#include <winsock2.h>
 
-#pragma comment(lib, "ws2_32.lib")
-
-extern SOCKET clientSocket;
-extern const int SERVER_PORT;
-
-#ifndef DLLEXPORT
-#define DLLEXPORT extern "C" __declspec(dllexport)
+// Định nghĩa macro để xuất hàm ra DLL
+#ifdef BUILD_DLL
+    #define DLLEXPORT extern "C" __declspec(dllexport)
+#else
+    #define DLLEXPORT extern "C" __declspec(dllimport)
 #endif
 
+// Cấu trúc hỗ trợ (Giữ nguyên dùng nội bộ nếu cần)
 struct ProcessInfo {
     std::string name;
     std::string id;
     std::string threadCount;
 };
-
 typedef std::map<std::string, ProcessInfo> ProcessMap;
 
-// Các hàm nội bộ
-void connectToServer();
-void sendCommand(std::string command);
-void receiveTextResponse();               
-ProcessMap receiveProcessList(bool isApp);
-void receiveImageResponse();
+// ==========================================
+//      CÁC HÀM XUẤT KHẨU (Mapping với Python)
+// ==========================================
 
-// ==================================================
-//      DANH SÁCH HÀM XUẤT KHẨU CHO PYTHON
-// ==================================================
+// 1. Quản lý kết nối
 DLLEXPORT void InitWinsock();
 DLLEXPORT bool ConnectToServer(const char* ip, int port);
 DLLEXPORT void CloseConnection();
 
-// Hàm gửi lệnh chung
+// 2. Gửi lệnh thô
 DLLEXPORT void SendStringCmd(const char* cmd);
 
-// Hàm lấy dữ liệu (Ghi ra file để Python đọc)
-DLLEXPORT void GetAppList();
-DLLEXPORT void GetProcessList();
-DLLEXPORT void CaptureScreen();
+// 3. Các hàm lấy thông tin (ĐÃ SỬA KIỂU TRẢ VỀ -> const char*)
+DLLEXPORT const char* GetAppList();         // Thay vì void
+DLLEXPORT const char* GetProcessList();     // Thay vì void
+DLLEXPORT const char* GetInstalledApps();   // Thay vì void
+DLLEXPORT const char* GetDrives();          // Thay vì void
+DLLEXPORT const char* ExplorePath(const char* path); // Thay vì void
 
-// Hàm quay Video
+// 4. Các hàm xử lý đa phương tiện (Vẫn giữ void vì ghi file binary)
+DLLEXPORT void CaptureScreen();
 DLLEXPORT void ReceiveVideoStream(int duration);
 DLLEXPORT void ReceiveWebcamStream();
-DLLEXPORT void CaptureScreenToJpeg();
 DLLEXPORT void ReceiveScreenStream();
-DLLEXPORT void RecordScreenStream(int durationSeconds, const char* folderPath);
 
-DLLEXPORT void KillProcess(const char* pid);    // Diệt theo ID
-DLLEXPORT void StartProcess(const char* name);  // Mở theo Tên (VD: notepad)
-DLLEXPORT void HookKeylog();        // Bắt đầu theo dõi phím
-DLLEXPORT void UnhookKeylog();      // Dừng theo dõi
-DLLEXPORT void GetKeylog();         // Lấy dữ liệu phím đã gõ -> Lưu ra file keylog.txt
-DLLEXPORT void ShutdownServer();    // Tắt máy Server
+// 5. Các hàm điều khiển hệ thống
+DLLEXPORT void KillProcess(const char* pid);
+DLLEXPORT void StartProcess(const char* name);
+DLLEXPORT void ShutdownServer();
 DLLEXPORT void RestartServer();
 
-DLLEXPORT void GetDrives();
-DLLEXPORT void ExplorePath(const char* path);
+// 6. Keylogger & Notification
+DLLEXPORT void HookKeylog();
+DLLEXPORT void UnhookKeylog();
+DLLEXPORT void GetKeylog();
+DLLEXPORT void GetNotificationHistory();
+
+// Thêm dòng này vào ClientLib.h
 DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
 
-DLLEXPORT void GetInstalledApps();
-DLLEXPORT void GetNotificationHistory();
+#endif // CLIENTLIB_H
