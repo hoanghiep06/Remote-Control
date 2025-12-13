@@ -78,22 +78,30 @@ portInput.value = "8888";
 
 
 // Biến toàn cục để lưu thời gian bắt đầu bấm nút
-let connectStartTime = 0;
+let connectStartTime = 0; 
 
 function handleConnection() {
-    const targetIP = ipInput.value.trim();
-    const targetPort = portInput.value.trim();
+    // 1. Lấy thông tin MÁY ĐÍCH (Máy nạn nhân) từ ô nhập
+    const targetIP = document.getElementById('ipInput').value.trim();
+    const targetPort = document.getElementById('portInput').value.trim();
 
-    if (!targetIP || !targetPort) { alert("Thiếu IP/Port!"); return; }
+    if (!targetIP || !targetPort) { 
+        alert("Vui lòng nhập IP và Port của máy cần điều khiển!"); 
+        return; 
+    }
+
+    // 2. Xác định địa chỉ MÁY CHỦ WEB (Máy chạy Python/Bridge)
+    // window.location.hostname: Tự động lấy IP của máy đang mở web
+    // Nếu bạn mở web trên localhost -> nó là localhost
+    // Nếu bạn mở trên điện thoại (truy cập IP máy tính) -> nó là IP máy tính
+    const bridgeIP = window.location.hostname || "localhost";
+    const bridgePort = "8888"; // Port WebSocket cố định trong webapp.py
+
     if (socket) { try { socket.close(); } catch(e){} }
 
-    // GHI NHỚ THỜI GIAN BẮT ĐẦU
+    // --- GIAO DIỆN MÀN HÌNH CHỜ ---
     connectStartTime = Date.now();
-
-    // 1. Ẩn form Login
     document.getElementById('loginSection').style.display = 'none';
-    
-    // 2. Hiện màn hình Chờ (Transition)
     const trans = document.getElementById('transitionScreen');
     
     // Reset nội dung
@@ -101,30 +109,42 @@ function handleConnection() {
     document.getElementById('transIcon').classList.add('bouncing');
     document.getElementById('transTitle').innerText = "Đang kết nối...";
     document.getElementById('transTitle').style.color = "#86efac";
-    document.getElementById('transDesc').innerText = `Đang gọi đến ${targetIP}:${targetPort}...`;
+    // Hiển thị rõ đang gọi tới ai
+    document.getElementById('transDesc').innerText = `Đang gọi tới ${targetIP}:${targetPort}...`;
     
-    // Bắt buộc hiện bằng JS
     trans.style.display = 'flex';
     trans.style.opacity = '1';
 
     try {
-        socket = new WebSocket(`ws://${targetIP}:${targetPort}`);
-        socket.onopen = function() { socket.send("CONNECT"); };
+        // 3. KẾT NỐI WEBSOCKET TỚI BRIDGE (PYTHON)
+        console.log(`[WS] Connecting to Bridge at ws://${bridgeIP}:${bridgePort}`);
+        socket = new WebSocket(`ws://${bridgeIP}:${bridgePort}`);
         
+        socket.onopen = function() { 
+            console.log("[WS] Connected to Bridge -> Sending Target Info");
+            // [QUAN TRỌNG] Gửi lệnh: CONNECT <IP_NẠN_NHÂN> <PORT_NẠN_NHÂN>
+            // Python sẽ nhận lệnh này và thực hiện kết nối TCP thực sự
+            socket.send(`CONNECT ${targetIP} ${targetPort}`); 
+        };
+
         socket.onmessage = function(event) {
+            // Python trả về kết quả kết nối TCP
             if (event.data.includes("Bridge OK") || event.data.includes("connected") || event.data.includes("OK")) {
                 showSuccess(targetIP, targetPort);
-            } else if (event.data.includes("error")) {
-                showError("Lỗi: Server C++ chưa bật!");
+            } else if (event.data.includes("error") || event.data.includes("FAIL")) {
+                showError(`Không thể kết nối tới ${targetIP} (Kiểm tra IP hoặc Firewall máy đó)`);
             }
         };
-        socket.onerror = function() { showError("Lỗi kết nối Socket!"); };
+
+        socket.onerror = function() { 
+            showError("Lỗi: Không tìm thấy Server Python (Bridge)!"); 
+        };
         
         // Timeout 10s
         setTimeout(() => {
             if (trans.style.display !== 'none' && 
                 document.getElementById('transTitle').innerText.includes('Đang')) {
-                showError("Timeout: Server không phản hồi.");
+                showError("Quá thời gian chờ (Server không phản hồi).");
             }
         }, 10000);
 
