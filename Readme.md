@@ -1,108 +1,144 @@
-🌐 REMOTE CONTROL SYSTEM
-Next-Generation Remote Administration & Monitoring Ecosystem
-📖 Tổng quan (Executive Summary)
-Nexus Remote Control (tên mã: Khu Vườn IoT) là một hệ thống quản trị và giám sát từ xa đa nền tảng, được xây dựng dựa trên kiến trúc Hybrid Multi-Language tiên tiến. Dự án phá vỡ rào cản giữa việc truy cập hệ thống mức thấp (Low-level System Access) và trải nghiệm người dùng hiện đại (Modern UX) thông qua giao diện Web trực quan.
+# 🌐 REMOTE CONTROL SYSTEM
 
-Hệ thống cho phép người quản trị (Administrator) thực hiện các tác vụ kiểm soát, theo dõi tài nguyên và thao tác tập tin trên máy trạm (Target Machine) theo thời gian thực (Real-time) thông qua giao thức TCP/IP được tối ưu hóa độ trễ.
+## Next-Generation Remote Administration & Monitoring Ecosystem
 
-🏗️ Kiến trúc Hệ thống (System Architecture)
-Dự án sử dụng mô hình Client-Server phức hợp, kết hợp sức mạnh của 4 ngôn ngữ lập trình để tối ưu hóa hiệu năng từng phân hệ:
+---
 
-Target Agent (Server-side | C# .NET):
+## 📖 Tổng quan (Executive Summary)
 
-Hoạt động như một Service ngầm trên máy nạn nhân.
+**Remote Control** (tên mã: **Khu Vườn IoT**) là một hệ thống quản trị và giám sát từ xa đa nền tảng, được xây dựng trên kiến trúc **Hybrid Multi-Language** nhằm tối ưu hiệu năng và khả năng mở rộng. Dự án kết nối truy cập hệ thống mức thấp (**Low-level System Access**) với trải nghiệm người dùng hiện đại (**Modern UX**) thông qua giao diện Web trực quan.
 
-Chịu trách nhiệm tương tác sâu với Windows API (User32, Kernel32, GDI+) để thu thập dữ liệu và thực thi lệnh.
+Hệ thống cho phép **Administrator** kiểm soát, giám sát tài nguyên và thao tác dữ liệu trên **Target Machine** theo thời gian thực (**Real-time**) thông qua giao thức **TCP/IP** được tối ưu hóa độ trễ.
 
-Xử lý đa luồng (Multi-threading) để đảm bảo các tác vụ (Keylog, Stream, Shell) chạy song song không gây treo máy.
+---
 
-Native Middleware (Bridge | C++):
+## 🏗️ Kiến trúc Hệ thống (System Architecture)
 
-Đóng vai trò là lớp trung gian hiệu năng cao (High-performance Bridge).
+Dự án áp dụng mô hình **Client–Server phức hợp**, kết hợp 4 ngôn ngữ lập trình để phát huy tối đa thế mạnh của từng phân hệ.
 
-Quản lý kết nối Socket TCP, đóng gói/giải mã gói tin (Packet Marshaling) và tối ưu hóa bộ đệm (Buffer management) để truyền tải hình ảnh/video mượt mà.
+### 1. Target Agent (Server-side | C# .NET)
 
-Core Controller (Client-side | Python):
+* Chạy dưới dạng **Background Service** trên máy đích.
+* Tương tác trực tiếp với **Windows API** (*User32, Kernel32, GDI+*).
+* Thu thập dữ liệu hệ thống và thực thi lệnh điều khiển.
+* Hỗ trợ **Multi-threading** để các tác vụ như *Keylogger, Streaming, Remote Shell* hoạt động song song, không gây treo hệ thống.
 
-Sử dụng thư viện ctypes để giao tiếp trực tiếp với Middleware C++.
+### 2. Native Middleware (Bridge | C++)
 
-Vận hành Web Server (HTTP/WebSocket) để phục vụ giao diện điều khiển.
+* Đóng vai trò **High-performance Bridge** giữa C# và Python.
+* Quản lý **TCP Socket**, đóng gói/giải mã dữ liệu (*Packet Marshaling*).
+* Tối ưu **Buffer Management** nhằm truyền tải hình ảnh/video mượt mà, độ trễ thấp.
 
-Xử lý logic nghiệp vụ: Phân tích log, xử lý ảnh (OpenCV), quản lý file.
+### 3. Core Controller (Client-side | Python)
 
-Interactive Dashboard (Frontend | HTML/JS/CSS):
+* Giao tiếp với Middleware C++ thông qua **ctypes**.
+* Vận hành **Web Server (HTTP / WebSocket)**.
+* Xử lý logic nghiệp vụ: phân tích log, xử lý ảnh (*OpenCV*), quản lý tập tin.
 
-Giao diện "IoT Garden" với hiệu ứng thời tiết động (Mưa, Tuyết, Ngày/Đêm).
+### 4. Interactive Dashboard (Frontend | HTML / CSS / JavaScript)
 
-Sử dụng AJAX/Fetch API và WebSocket để cập nhật dữ liệu thời gian thực (Real-time Telemetry).
+* Giao diện **“IoT Garden”** mang tính trực quan cao.
+* Kết nối **AJAX / Fetch API / WebSocket** để cập nhật dữ liệu thời gian thực.
+* Hiệu ứng động tăng trải nghiệm người dùng.
 
-🚀 Tính năng Đột phá (Key Features)
-1. 👁️ Giám sát Trực quan (Visual Surveillance)
-Webcam Streaming: Truyền hình ảnh trực tiếp từ Camera với độ trễ thấp. Hỗ trợ ghi hình (Recording) và chụp ảnh nhanh (Snapshot).
+---
 
-Desktop Monitoring: Theo dõi toàn bộ hoạt động màn hình của máy trạm. Thuật toán nén ảnh JPEG thông minh giúp cân bằng giữa chất lượng và băng thông.
+## 🚀 Tính năng Chính (Key Features)
 
-2. ⚡ Kiểm soát Hệ thống (System Control)
-Process Manager: Liệt kê, theo dõi và tiêu diệt (Kill) các tiến trình đang chạy. Tự động nhận diện ứng dụng rác.
+### 👁️ 1. Giám sát Trực quan (Visual Surveillance)
 
-Power Management: Thực hiện lệnh Tắt máy (Shutdown) hoặc Khởi động lại (Restart) từ xa.
+* **Webcam Streaming**: Truyền video trực tiếp với độ trễ thấp, hỗ trợ *Recording* và *Snapshot*.
+* **Desktop Monitoring**: Theo dõi màn hình máy đích, sử dụng nén JPEG thông minh để cân bằng chất lượng và băng thông.
 
-Hiệu ứng "Meteor Strike": Giao diện kích hoạt hiệu ứng thiên thạch rơi đậm chất điện ảnh khi thực hiện lệnh tắt máy chủ.
+### ⚡ 2. Kiểm soát Hệ thống (System Control)
 
-3. 📂 Quản trị Dữ liệu (Data Administration)
-File Explorer: Duyệt toàn bộ ổ đĩa, thư mục. Hỗ trợ tải file (Download) từ máy trạm về máy quản trị với tốc độ cao.
+* **Process Manager**: Liệt kê, giám sát và kết thúc (*Kill*) tiến trình.
+* **Power Management**: Tắt máy (*Shutdown*) và khởi động lại (*Restart*) từ xa.
+* **Meteor Strike Mode**: Hiệu ứng điện ảnh khi thực hiện lệnh tắt hệ thống.
 
-Keystroke Telemetry (Keylogger): Ghi lại toàn bộ lịch sử phím bấm.
+### 📂 3. Quản trị Dữ liệu (Data Administration)
 
-Cải tiến: Thuật toán xử lý ngôn ngữ tự nhiên giúp "làm sạch" các phím xóa (Backspace) và hiển thị chính xác tiếng Việt (Telex/VNI).
+* **File Explorer**: Duyệt ổ đĩa, thư mục; tải file từ máy đích về máy quản trị.
+* **Keystroke Telemetry (Keylogger)**:
 
-Notification History: Trích xuất và đọc lịch sử thông báo (Zalo, Messenger, System) từ cơ sở dữ liệu hệ thống Windows.
+  * Ghi nhận toàn bộ phím bấm.
+  * Thuật toán làm sạch *Backspace*.
+  * Hỗ trợ hiển thị tiếng Việt (*Telex / VNI*).
+* **Notification History**: Trích xuất lịch sử thông báo từ Windows (Zalo, Messenger, System).
 
-4. 📊 Theo dõi Hiệu năng (Performance Monitoring)
-Dashboard hiển thị biểu đồ trực quan về mức độ tiêu thụ CPU, RAM, và Disk Usage theo thời gian thực.
+### 📊 4. Theo dõi Hiệu năng (Performance Monitoring)
 
-Cảnh báo sớm các bất thường của hệ thống.
+* Dashboard hiển thị **CPU / RAM / Disk Usage** theo thời gian thực.
+* Cảnh báo sớm các bất thường hệ thống.
 
-🛠️ Cài đặt & Triển khai (Installation)
-Yêu cầu hệ thống
-Target Machine: Windows 10/11 (.NET Framework 4.5+).
+---
 
-Admin Machine: Python 3.8+, C++ Compiler (MinGW/MSVC).
+## 🛠️ Cài đặt & Triển khai (Installation)
 
-Bước 1: Build Target (Máy bị điều khiển)
-Mở project server.cs bằng Visual Studio.
+### 🔧 Yêu cầu Hệ thống
 
-Build ra file server.exe.
+* **Target Machine**: Windows 10 / 11, .NET Framework 4.5+
+* **Admin Machine**: Python 3.8+, Trình biên dịch C++ (*MinGW / MSVC*)
 
-Chạy server.exe trên máy đích. (Đảm bảo Port 5656 được mở).
+---
 
-Bước 2: Build Controller (Máy điều khiển)
-Biên dịch file thư viện liên kết động:
+### 🖥️ Bước 1: Build Target Agent
 
-Bash
+1. Mở project `server.cs` bằng **Visual Studio**.
+2. Build tạo file `server.exe`.
+3. Chạy `server.exe` trên máy đích.
+4. Đảm bảo **Port 5656** được mở.
 
+---
+
+### 💻 Bước 2: Build Controller
+
+#### Biên dịch Middleware C++
+
+```bash
 g++ -shared -o client.dll ClientLib.cpp -lws2_32
-Cài đặt thư viện Python cần thiết:
+```
 
-Bash
+#### Cài đặt thư viện Python
 
+```bash
 pip install opencv-python numpy
-Khởi động Web Server:
+```
 
-Bash
+#### Khởi động Web Server
 
+```bash
 python webapp.py
-Bước 3: Vận hành
-Truy cập trình duyệt tại địa chỉ: http://localhost:8000.
+```
 
-Nhập IP của máy Target và bấm "Kết nối ngay".
-Thông thường, mặc định 127.0.0.1 và 5656 là IP và port mặc định khi thao tác trên chính máy tính cá nhân
+---
 
-🎨 Giao diện Người dùng (User Interface)
-Giao diện được thiết kế theo phong cách Glassmorphism hiện đại, tích hợp hệ thống môi trường ảo:
+### 🌐 Bước 3: Vận hành Hệ thống
 
-Dynamic Weather: Hệ thống tự động thay đổi thời tiết (Mưa, Tuyết rơi, Nắng) ngẫu nhiên.
+* Truy cập: `http://localhost:8000`
+* Nhập **IP** và **Port** của Target Machine.
+* Mặc định khi test local:
 
-Day/Night Cycle: Chế độ Sáng/Tối giúp bảo vệ mắt và tăng tính thẩm mỹ.
+  * IP: `127.0.0.1`
+  * Port: `5656`
 
-Interactive Elements: Các hiệu ứng tương tác như hộp quà rơi, sấm chớp, và rung chấn màn hình.
+---
+
+## 🎨 Giao diện Người dùng (User Interface)
+
+Giao diện được thiết kế theo phong cách **Glassmorphism**, kết hợp hệ sinh thái ảo sinh động:
+
+* **Dynamic Weather**: Mưa, tuyết, nắng thay đổi ngẫu nhiên.
+* **Day / Night Cycle**: Chế độ sáng – tối bảo vệ mắt.
+* **Interactive Effects**: Sấm chớp, hộp quà rơi, rung chấn màn hình.
+
+---
+
+## 📌 Ghi chú
+
+* Dự án mang tính **nghiên cứu – học thuật**.
+* Không khuyến khích sử dụng cho mục đích xâm phạm quyền riêng tư.
+
+---
+
+**© Remote Control – Khu Vườn IoT**
