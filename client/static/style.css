@@ -155,8 +155,32 @@ body.dark-mode .sun-container { display: none; }
 .btn-nature.danger { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; color: #fca5a5; }
 .btn-nature.danger:hover { background: #ef4444; color: white; }
 
-.cam-frame { width: 100%; height: 250px; background: #000; border-radius: 10px; border: 1px solid rgba(255,255,255,0.2); position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.cam-frame img { width: 100%; height: 100%; object-fit: cover; }
+
+/* --- TRẠNG THÁI NÚT VÔ HIỆU HÓA --- */
+.btn-nature.disabled {
+    opacity: 0.3;           /* Mờ đi */
+    pointer-events: none;   /* Không cho bấm */
+    filter: grayscale(100%);/* Mất màu */
+    cursor: not-allowed;
+}
+
+.cam-frame {
+    width: 100%;       /* Bắt buộc rộng 100% khung chứa */
+    height: 100%;      /* Cao 100% */
+    background: #000;  /* Nền đen */
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    border-radius: 12px;
+}
+
+.cam-frame img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain; /* Hoặc 'cover' nếu muốn tràn viền cắt góc */
+}
 
 .nature-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; color: #d1fae5; }
 .nature-table th { text-align: left; padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.2); color: #6ee7b7; }
@@ -472,9 +496,24 @@ body.dark-mode .css-grass-container {
 }
 /* Ngôi sao & Đồ trang trí */
 .star-top { 
-    position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
-    font-size: 26px; z-index: 10; animation: twinkle 1s infinite alternate; text-shadow: 0 0 10px gold;
+    position: absolute; top: 30px; left: 50%; transform: translateX(-50%);
+    font-size: 24px; z-index: 10; animation: starPulse 1.5s infinite alternate ease-in-out; transform-origin: center center; text-shadow: 0 0 10px gold;
 }
+
+/* Keyframes mới: Giữ nguyên translateX(-50%) để không bị lệch */
+@keyframes starPulse {
+    0% { 
+        transform: translateX(-50%) scale(1); 
+        text-shadow: 0 0 5px #ffd700;
+        opacity: 0.8;
+    }
+    100% { 
+        transform: translateX(-50%) scale(1.4); /* Phóng to 1.4 lần */
+        text-shadow: 0 0 20px #ffd700, 0 0 10px #fff; /* Phát sáng rực rỡ */
+        opacity: 1;
+    }
+}
+
 .ornament { 
     position: absolute; width: 10px; height: 10px; border-radius: 50%; z-index: 9;
     box-shadow: 1px 1px 2px rgba(0,0,0,0.3); animation: blink 2s infinite; 
@@ -584,28 +623,45 @@ body.dark-mode .css-ground-snow {
 
 .falling-item {
     position: absolute;
-    top: 0px;
-    z-index: 5;
-    font-size: 2rem; /* Kích thước quà */
-    filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
-    opacity: 0;
-    /* Animation: Rơi xuống -> Dừng lại chút -> Mờ dần */
-    animation: giftDropFade 4s ease-in forwards;
+    top: -50px; /* Bắt đầu từ trên nóc màn hình */
+    z-index: 9999;
+    pointer-events: none;
+    
+    /* Gọi animation mới */
+    animation-name: fallWithWind;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+}
+
+@keyframes fallWithWind {
+    0% {
+        transform: translateY(0) translateX(0) rotate(0deg);
+        opacity: 0;
+    }
+    10% {
+        opacity: 1; /* Hiện ra sau khi rơi một chút */
+    }
+    100% {
+        /* Rơi xuống 110% chiều cao (translateY) */
+        /* Bay sang phải 150px (translateX) -> TẠO HIỆU ỨNG GIÓ */
+        /* Xoay vòng tròn 360 độ (rotate) */
+        transform: translateY(110vh) translateX(150px) rotate(360deg); 
+        opacity: 1;
+    }
 }
 
 /* Hiệu ứng tuyết rơi kèm quà (khác tuyết thường) */
 .falling-magic-snow {
     position: absolute;
-    color: #fff;       /* Màu trắng */
-    font-size: 20px;   /* Kích thước cơ bản */
-    line-height: 1;
+    top: -50px;
+    z-index: 9998;
+    color: #a5f3fc;
+    pointer-events: none;
+    text-shadow: 0 0 5px white;
     
-    /* Hiệu ứng phát sáng lấp lánh */
-    text-shadow: 0 0 5px #fff, 0 0 10px #a5f3fc; 
-    
-    /* Animation: Rơi xoay vòng */
-    animation: magicSnowFall 5s linear forwards;
-    opacity: 0;
+    animation-name: fallWithWind; /* Dùng chung hiệu ứng gió */
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
 }
 
 @keyframes magicSnowFall {
@@ -924,3 +980,319 @@ body.dark-mode .pj-name { color: #e2e8f0; }
 }
 /* Ẩn icon cũ đi khi đang ghi */
 .icon-btn.record-btn.recording span { display: none; }
+
+/* --- TOAST NOTIFICATION (THÔNG BÁO GÓC PHẢI) --- */
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 99999; /* Đảm bảo nằm trên tất cả */
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none; /* Không chặn click chuột vào web */
+}
+
+.toast {
+    background: rgba(15, 23, 42, 0.95); /* Nền tối sang trọng */
+    border: 1px solid rgba(255,255,255,0.15);
+    border-left: 4px solid #22c55e; /* Vạch màu xanh lá */
+    color: #fff;
+    padding: 15px 20px;
+    border-radius: 8px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+    min-width: 280px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    
+    /* Animation bay vào từ phải */
+    animation: slideInRight 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), 
+               fadeOut 0.5s ease 3s forwards;
+    backdrop-filter: blur(10px);
+    pointer-events: auto;
+}
+
+/* Các loại màu thông báo */
+.toast.success { border-left-color: #22c55e; } /* Xanh lá */
+.toast.error   { border-left-color: #ef4444; } /* Đỏ */
+.toast.info    { border-left-color: #3b82f6; } /* Xanh dương */
+
+.toast-icon { font-size: 1.4rem; }
+.toast-msg { font-size: 0.95rem; font-weight: 500; }
+
+@keyframes slideInRight {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+@keyframes fadeOut {
+    to { transform: translateY(-10px); opacity: 0; }
+}
+
+
+/* --- RECORD BUTTON & INPUT --- */
+.record-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Khoảng cách giữa ô nhập và nút Rec */
+    background: rgba(0, 0, 0, 0.4); /* Nền mờ cho cụm này */
+    padding: 4px;
+    border-radius: 30px;
+    transition: all 0.3s ease;
+}
+
+/* Ô nhập giây: Mặc định ẩn */
+.rec-timer-input {
+    width: 0;
+    opacity: 0;
+    border: none;
+    background: transparent;
+    color: #86efac; /* Chữ màu xanh lá sáng */
+    font-weight: bold;
+    text-align: center;
+    font-size: 0.9rem;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0;
+    outline: none;
+}
+
+/* Khi class 'show-input' được thêm vào (do JS xử lý sau 3s) */
+.record-wrapper:hover .rec-timer-input,
+.record-wrapper.show-input .rec-timer-input {
+    width: 40px; /* Độ rộng vừa đủ số */
+    opacity: 1;
+    padding: 0 5px;
+    border-bottom: 1px solid #86efac; /* Gạch chân đẹp */
+}
+
+.rec-timer-input::-webkit-outer-spin-button,
+.rec-timer-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.top-right-controls {
+    position: absolute;
+    top: 15px; right: 15px;
+    display: flex;
+    flex-direction: column; /* Xếp dọc */
+    gap: 10px;
+    z-index: 20;
+    align-items: flex-end; /* Canh lề phải */
+}
+
+/* Focus thì sáng lên */
+.rec-timer-input:focus {
+    background: rgba(255,255,255,0.9);
+    color: #000;
+    outline: none;
+}
+
+/* --- LAYOUT 2 CỘT CHO APPS --- */
+.apps-container {
+    display: grid;
+    grid-template-columns: 300px 1fr; /* Trái 300px, Phải còn lại */
+    gap: 20px;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* --- CỘT TRÁI: THỐNG KÊ (CHARTS) --- */
+.stats-panel {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    overflow-y: auto;
+}
+
+.stat-card {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    padding: 15px;
+    text-align: center;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.stat-detail {
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    margin-top: 5px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+
+.chart-circle {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: conic-gradient(#3b82f6 0%, rgba(255,255,255,0.1) 0%);
+    margin: 10px auto;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: background 0.5s ease;
+}
+/* Lỗ tròn ở giữa để tạo hình Donut */
+.chart-circle::before {
+    content: "";
+    position: absolute;
+    width: 80px; height: 80px;
+    background: #1e293b; /* Màu nền khớp với theme */
+    border-radius: 50%;
+}
+.chart-value {
+    position: relative;
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: #fff;
+    z-index: 2;
+}
+.stat-title { color: #94a3b8; font-size: 0.9rem; margin-bottom: 5px; }
+
+/* Màu sắc riêng cho từng loại */
+.chart-cpu { --c: #ef4444; }
+.chart-ram { --c: #f59e0b; }
+.chart-disk { --c: #10b981; }
+
+/* --- CỘT PHẢI: BẢNG APPS (Thu hẹp) --- */
+.apps-table-panel {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+
+/* --- HIỆU ỨNG NGÀY TẬN THẾ (DINOSAUR EXTINCTION) --- */
+
+/* 1. Lớp phủ màu Cam/Đỏ (Atmosphere Burn) */
+.apocalypse-overlay {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: linear-gradient(to bottom, rgba(255, 69, 0, 0.8), rgba(139, 0, 0, 0.9));
+    z-index: 99990; /* Đè lên giao diện nhưng dưới thiên thạch */
+    pointer-events: none;
+    opacity: 0; /* Bắt đầu trong suốt */
+    transition: opacity 4s ease-in; /* Dần dần đỏ rực lên trong 4 giây */
+    mix-blend-mode: hard-light; /* Hòa trộn màu để làm rực cả đất và cây */
+}
+
+/* Khi kích hoạt thì hiện rõ */
+.apocalypse-overlay.active {
+    opacity: 1;
+}
+
+/* 2. Container chứa mưa thiên thạch */
+.meteor-storm-container {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 99995;
+    overflow: hidden;
+}
+
+/* 3. Viên thiên thạch đơn lẻ */
+.meteor-slow {
+    position: absolute;
+    /* Dài hơn, mỏng hơn để tạo cảm giác lao nhanh nhưng nhìn từ xa */
+    width: 300px; 
+    height: 4px;
+    
+    /* Màu: Trắng -> Vàng -> Cam -> Trong suốt */
+    background: linear-gradient(90deg, #fff, #fbbf24, #ef4444, transparent);
+    
+    /* Phát sáng */
+    box-shadow: 0 0 10px 2px #f59e0b;
+    
+    /* Xoay chéo */
+    transform: rotate(-45deg);
+    opacity: 0;
+}
+
+/* Đầu thiên thạch */
+.meteor-slow::after {
+    content: '';
+    position: absolute;
+    left: 0; top: -2px;
+    width: 8px; height: 8px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 15px 5px #fff, 0 0 30px 10px #f59e0b;
+}
+
+/* Animation rơi chậm (3-5 giây) */
+@keyframes meteorFallSlow {
+    0% {
+        opacity: 1;
+        transform: translate(0, 0) rotate(-45deg);
+    }
+    100% {
+        opacity: 0;
+        /* Rơi chéo từ góc phải trên xuống trái dưới */
+        /* Quãng đường dài để đi hết màn hình */
+        transform: translate(-150vw, 150vh) rotate(-45deg); 
+    }
+}
+
+/* Màn hình chớp trắng cuối cùng (Impact) */
+.final-flash {
+    position: fixed;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: white;
+    z-index: 100000;
+    opacity: 0;
+    transition: opacity 0.5s ease-out;
+}
+
+/* --- VỤ NỔ KHI THIÊN THẠCH CHẠM ĐẤT --- */
+.impact-explosion {
+    position: fixed;
+    bottom: -20px; /* Nổ từ sát mép dưới */
+    width: 120px; height: 80px; /* Hình dẹt ngang */
+    
+    /* Căn giữa tại điểm rơi */
+    transform: translateX(-50%) scale(0);
+    transform-origin: bottom center;
+    
+    z-index: 99996; /* Đè lên thiên thạch */
+    pointer-events: none;
+    
+    /* Hình dáng đám mây nổ (Bán nguyệt) */
+    border-radius: 100px 100px 0 0;
+    
+    /* Màu sắc: Tâm trắng -> Vàng -> Đỏ -> Khói đen */
+    background: radial-gradient(circle at bottom, 
+        #ffffff 10%, 
+        #facc15 30%, 
+        #ef4444 60%, 
+        rgba(50, 50, 50, 0.8) 90%
+    );
+    
+    /* Hào quang */
+    box-shadow: 0 0 40px 10px #f97316;
+    
+    /* Animation nổ */
+    animation: boomGround 0.8s ease-out forwards;
+}
+
+@keyframes boomGround {
+    0% {
+        opacity: 1;
+        transform: translateX(-50%) scale(0.2);
+    }
+    40% {
+        opacity: 1;
+        transform: translateX(-50%) scale(1.5); /* Bùng to cực đại */
+    }
+    100% {
+        opacity: 0;
+        transform: translateX(-50%) scale(3); /* Tan biến vào không khí */
+        filter: blur(10px);
+    }
+}

