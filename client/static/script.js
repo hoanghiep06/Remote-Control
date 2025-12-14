@@ -50,8 +50,31 @@ function createStars() {
 
 // Gọi khởi tạo ngay
 document.addEventListener("DOMContentLoaded", () => {
+    // Khởi tạo hiệu ứng nền cũ
     createClouds();
     createStars();
+
+    // LOGIC INTRO -> LOGIN
+    const intro = document.getElementById('introOverlay');
+    const login = document.getElementById('loginSection');
+    
+    // Chờ 5 giây (khớp với thanh loading)
+    setTimeout(() => {
+        if(intro) {
+            intro.classList.add('finished'); // Kích hoạt mờ dần
+            
+            setTimeout(() => {
+                intro.style.display = 'none'; // Ẩn hẳn
+                
+                // Hiện Login Form
+                if(login) {
+                    login.style.display = 'block'; 
+                    // Thêm hiệu ứng hiện ra cho Login
+                    login.style.animation = 'popIn 0.8s ease forwards';
+                }
+            }, 1000); // Chờ 1s để hiệu ứng mờ kết thúc
+        }
+    }, 5000);
 });
 
 // Hàm đổi giao diện Sáng/Tối

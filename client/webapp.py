@@ -17,7 +17,6 @@ import sqlite3
 import re
 import cv2
 
-
 def clean_keylog_text(raw_text):
     if not raw_text: return ""
     
