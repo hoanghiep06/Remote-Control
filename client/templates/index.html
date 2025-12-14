@@ -10,6 +10,49 @@
 </head>
 <body class="light-mode">
 
+    <div id="introOverlay">
+        <div class="intro-content">
+            <h1 class="intro-title sparkle-text">NHÓM PHÁT TRIỂN</h1>
+            <p class="intro-sub">Đồ án Mạng Máy Tính • Lớp: 24TNT1</p>
+            
+            <div class="team-container">
+                <div class="member-card" style="--delay: 0.2s">
+                    <div class="avatar-box">
+                        <img src="images/1.jpg" alt="Mai Hoàng Hiệp">
+                    </div>
+                    <div class="member-info">
+                        <h3>Nguyễn Duy Đạt</h3>
+                        <span class="mssv">24122014</span>
+                    </div>
+                </div>
+
+                <div class="member-card" style="--delay: 0.5s">
+                    <div class="avatar-box">
+                        <img src="images/2.jpg" alt="Nguyễn Văn A">
+                    </div>
+                    <div class="member-info">
+                        <h3>Mai Hoàng Hiệp</h3>
+                        <span class="mssv">24122015</span>
+                    </div>
+                </div>
+
+                <div class="member-card" style="--delay: 0.8s">
+                    <div class="avatar-box">
+                        <img src="images/3.jpg" alt="Trần Thị B">
+                    </div>
+                    <div class="member-info">
+                        <h3>Trần Trung Hiếu</h3>
+                        <span class="mssv">24122033</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="intro-loader">
+                <div class="loader-bar"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="flash-overlay" id="flash"></div>
     <div class="rain-container" id="rainContainer"></div>
     <div id="lightningContainer"></div>
@@ -63,7 +106,7 @@
 
     <button class="theme-toggle" onclick="toggleTheme()">🌙 Chế độ Đêm</button>
 
-    <div id="loginSection">
+    <div id="loginSection" style="display: none;">
         
         <h2 id="statusTitle">Smart Connect</h2>
         <p style="opacity: 0.8; font-size: 0.9rem; margin-bottom: 20px;" id="statusDesc">Sẵn sàng kết nối máy chủ.</p>
@@ -165,9 +208,22 @@
         <div class="project-info">
             <div class="pj-subject">Đồ Án Môn Mạng Máy Tính</div>
             <div class="pj-school">Trường Đại học Khoa học Tự Nhiên</div>
+
             <div class="pj-row">
-                <span class="pj-badge">Lớp 24TNT1</span>
-                <span class="pj-name">Mai Hoàng Hiệp - 24122015</span>
+                <div class="pj-member">
+                    <span class="pj-badge">Lớp 24TNT1</span>
+                    <span class="pj-name"> Nguyễn Duy Đạt - 24122014</span>
+                </div>
+
+                <div class="pj-member">
+                    <span class="pj-badge">Lớp 24TNT1</span>
+                    <span class="pj-name"> Mai Hoàng Hiệp - 24122015</span>
+                </div>
+
+                <div class="pj-member">
+                    <span class="pj-badge">Lớp 24TNT1</span>
+                    <span class="pj-name">Trần Trung Hiếu - 24122033</span>
+                </div>
             </div>
         </div>
     </div>
