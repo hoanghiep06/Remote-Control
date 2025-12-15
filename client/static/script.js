@@ -5,7 +5,7 @@ let recHoverTimer = null;
 let webcamAutoStopTimer = null;
 let screenAutoStopTimer = null;
 let currentViewMode = '';
-
+let isSuperviseOn = false;
 
 
 // --- 1. HIỆU ỨNG THIÊN NHIÊN (Giữ nguyên) ---
@@ -435,7 +435,15 @@ function renderContent(mode) {
             <div id="webcamFrame" class="cam-frame">
                 <div class="rec-indicator"><div class="rec-dot"></div> REC</div>
 
+                <div id="aiStatus" style="position:absolute; top:10px; left:10px; color:#00ff00; font-weight:bold; display:none; text-shadow: 1px 1px 2px black;">
+                    👁️ AI SUPERVISE ACTIVE
+                </div>
+
                 <div class="top-right-controls">
+                    <button id="btnSupervise" class="icon-btn" onclick="toggleSupervise()" title="Bật/Tắt Giám sát AI" style="margin-right:5px;">
+                        👁️
+                    </button>
+
                     <div class="record-wrapper" id="recWrapperWebcam">
                         <input type="number" id="recTimeWebcam" class="rec-timer-input" placeholder="s" min="0">
                         
@@ -1534,6 +1542,8 @@ window.toggleTheme = function() {
         // Chuyển sang TỐI (Đêm)
         body.classList.remove('light-mode'); body.classList.add('dark-mode');
         if(btn) btn.innerText = "☀️ Chế độ Ngày";
+
+        startNightCycle();
         
         // Đêm thì ngừng tan tuyết (trừ khi đang Mưa)
         if (currentWeather !== WEATHER.RAIN) {
@@ -1544,6 +1554,8 @@ window.toggleTheme = function() {
         body.classList.remove('dark-mode'); body.classList.add('light-mode');
         if(btn) btn.innerText = "🌙 Chế độ Đêm";
         
+        stopNightCycle();
+
         // Ngày thì tuyết bắt đầu tan (nếu đang có tuyết & không mưa)
         if (snowLevel > 0 && currentWeather !== WEATHER.RAIN) {
             startMelting(false); // Tan chậm
@@ -1906,6 +1918,182 @@ function triggerApocalypse(callback) {
     }, 5000);
 }
 
+function toggleSupervise() {
+    const btn = document.getElementById('btnSupervise');
+    const status = document.getElementById('aiStatus');
+    
+    // Đảo trạng thái
+    isSuperviseOn = !isSuperviseOn;
 
-// Bắt đầu chu trình sau 5 giây
+    // Cập nhật UI ngay lập tức
+    if (isSuperviseOn) {
+        btn.classList.add('recording'); // Tái sử dụng class đỏ hoặc tạo class mới
+        btn.style.color = "#00ff00";    // Icon màu xanh lá
+        btn.style.border = "1px solid #00ff00";
+        if(status) status.style.display = "block";
+        showToast("👁️ Đã BẬT giám sát thông minh!", "info");
+    } else {
+        btn.classList.remove('recording');
+        btn.style.color = "";
+        btn.style.border = "";
+        if(status) status.style.display = "none";
+        showToast("Đã tắt giám sát.", "info");
+    }
+
+    // Gọi API Server
+    fetch('/api/webcam/supervise', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ enable: isSuperviseOn })
+    })
+    .catch(err => console.error(err));
+}
+
+// ============================================================
+// 5. HIỆU ỨNG ĐÊM (NIGHT AMBIENCE) - Đom đóm & Sao băng
+// ============================================================
+
+let nightEffectTimer = null;
+
+// --- HÀM KHỞI TẠO (GỌI KHI CHUYỂN SANG DARK MODE) ---
+function startNightCycle() {
+    if (nightEffectTimer) clearTimeout(nightEffectTimer);
+    scheduleRandomNightEvent();
+}
+
+function stopNightCycle() {
+    if (nightEffectTimer) clearTimeout(nightEffectTimer);
+    
+    // Xóa ngay các phần tử đang bay để màn hình sạch sẽ
+    document.querySelectorAll('.firefly-container').forEach(e => e.remove());
+    document.querySelectorAll('.meteor-shower-container').forEach(e => e.remove());
+}
+
+// --- BỘ ĐIỀU PHỐI NGẪU NHIÊN ---
+function scheduleRandomNightEvent() {
+    // Chỉ chạy nếu đang ở Dark Mode
+    if (!document.body.classList.contains('dark-mode')) return;
+
+    // Random thời gian nghỉ giữa các sự kiện (5s đến 15s)
+    const nextTime = Math.random() * 10000 + 5000;
+
+    nightEffectTimer = setTimeout(() => {
+        // Random chọn sự kiện:
+        // 0-40%: Đom đóm (Nếu không mưa)
+        // 40-70%: Sao băng lẻ tẻ
+        // 70-90%: Mưa sao băng (Nhiều)
+        // 90-100%: Nghỉ ngơi (Không có gì)
+        
+        const chance = Math.random() * 100;
+
+        if (chance < 40) {
+            // Đom đóm chỉ bay khi trời tạnh ráo (Không mưa)
+            if (currentWeather !== WEATHER.RAIN) { 
+                spawnFireflies(); 
+            }
+        } 
+        else if (chance < 70) {
+            spawnShootingStars(1); // 1 ngôi sao lẻ loi
+        }
+        else if (chance < 90) {
+            spawnShootingStars(Math.floor(Math.random() * 5) + 3); // Mưa sao băng (3-8 ngôi)
+        }
+        
+        // Loop tiếp tục
+        scheduleRandomNightEvent();
+
+    }, nextTime);
+}
+
+// --- 1. HIỆU ỨNG ĐOM ĐÓM ---
+function spawnFireflies() {
+    let container = document.querySelector('.firefly-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'firefly-container';
+        document.body.appendChild(container);
+    }
+
+    // [TĂNG SỐ LƯỢNG] Cũ: 5-12 -> Mới: 12-25 con
+    const count = Math.floor(Math.random() * 14) + 12;
+    
+    for (let i = 0; i < count; i++) {
+        const fly = document.createElement('div');
+        fly.classList.add('firefly');
+        
+        fly.style.left = Math.random() * 100 + '%';
+        fly.style.bottom = Math.random() * 35 + '%'; // Bay cao hơn một chút (tầm 35% dưới)
+
+        // Random chuyển động bay lượn
+        const moveX = (Math.random() * 250 - 125) + 'px'; // Phạm vi bay rộng hơn xíu
+        const moveY = (Math.random() * 120 - 60) + 'px';
+        fly.style.setProperty('--move-x', moveX);
+        fly.style.setProperty('--move-y', moveY);
+        
+        fly.style.setProperty('--fly-duration', (Math.random() * 6 + 6) + 's'); // 6-12s
+        fly.style.setProperty('--flash-duration', (Math.random() * 2.5 + 1.5) + 's'); // 1.5-4s
+
+        container.appendChild(fly);
+        setTimeout(() => { fly.remove(); }, 18000); // Tăng thời gian sống lên 18s
+    }
+}
+
+// --- 2. HIỆU ỨNG SAO BĂNG ---
+function spawnShootingStars(amount) {
+    let container = document.querySelector('.meteor-shower-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.className = 'meteor-shower-container';
+        document.body.appendChild(container);
+    }
+
+    for (let i = 0; i < amount; i++) {
+        setTimeout(() => {
+            const star = document.createElement('div');
+            star.classList.add('shooting-star-v2');
+
+            // 1. Tính toán vị trí xuất phát (Bên trái hoặc phía trên)
+            // startX từ -10% (ngoài mép trái) đến 80% màn hình
+            const startXVal = (Math.random() * 90 - 10); 
+            star.style.setProperty('--start-x', startXVal + '%');
+
+            // 2. Tính toán khoảng cách bay ngang (Luôn dương để bay sang phải)
+            // Bay thêm từ 30vw đến 60vw sang phải
+            const destDistVal = (Math.random() * 30 + 30);
+            star.style.setProperty('--dest-dist', destDistVal + 'vw');
+            
+            // 3. [CHẬM LẠI] Thời gian bay: 2.5s đến 4.5s (Cũ là 1-2s)
+            const durationSec = (Math.random() * 2 + 2.5);
+            star.style.setProperty('--fall-duration', durationSec + 's');
+
+            container.appendChild(star);
+
+            // 4. Lên lịch tạo hiệu ứng LẤP LÁNH khi sao bay xong
+            setTimeout(() => {
+                // Ước lượng vị trí kết thúc để đặt hiệu ứng lấp lánh
+                // Vị trí X cuối = X đầu + khoảng cách bay
+                const endXEstimate = startXVal + destDistVal;
+                // Vị trí Y cuối = khoảng 85-90% chiều cao màn hình (gần đáy)
+                spawnSparkle(endXEstimate + '%', '85%');
+                
+                star.remove(); // Xóa sao băng
+            }, durationSec * 1000 - 200); // Kích hoạt sớm 200ms trước khi sao biến mất hẳn cho mượt
+
+        }, Math.random() * 3000); // Rải rác trong 3 giây
+    }
+}
+
+// --- HÀM PHỤ TRỢ: TẠO ĐỐM SÁNG LẤP LÁNH ---
+function spawnSparkle(x, y) {
+    const sparkle = document.createElement('div');
+    sparkle.className = 'star-sparkle';
+    sparkle.style.left = x;
+    sparkle.style.top = y;
+    document.body.appendChild(sparkle);
+
+    // Tự xóa sau khi animation kết thúc (0.8s)
+    setTimeout(() => sparkle.remove(), 800);
+}
+
+// Bắt đầu chu trình sau 2 giây
 setTimeout(scheduleNextWeather, 2000);

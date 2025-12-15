@@ -334,14 +334,19 @@ DLLEXPORT void ReceiveWebcamStream() {
 
         if (error) break;
 
-        ofstream file("webcam.jpg", ios::binary);
+        ofstream file("webcam.tmp", ios::binary);
         if (file.is_open()) {
             file.write(buffer, totalReceived);
-            file.flush();
-            file.close();
+            file.close(); // Đóng file nháp hoàn toàn
+            
+            // 2. Xóa file ảnh cũ (nếu có)
+            remove("webcam.jpg");
+
+            // 3. Đổi tên file nháp thành file chính
+            // Hành động này diễn ra trong 1 tích tắc, Python sẽ không bao giờ đọc phải file lỗi
+            rename("webcam.tmp", "webcam.jpg");
         }
-        // [QUAN TRỌNG] Sleep nhỏ để Python kịp đọc file
-        Sleep(10); 
+        Sleep(15);
     }
 
     delete[] buffer;

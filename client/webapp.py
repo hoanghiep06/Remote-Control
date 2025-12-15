@@ -16,6 +16,10 @@ import struct
 import sqlite3
 import re
 import cv2
+import face_recognition
+import numpy as np
+import math 
+
 def clean_keylog_text(raw_text):
     if not raw_text: return ""
     
@@ -83,6 +87,71 @@ webcam_writer = None
 is_recording_webcam = False
 webcam_record_thread = None
 is_recording_screen = False
+
+zalo_notifications = []   # list dict
+zalo_lock = threading.Lock()
+MAX_ZALO_NOTIFY = 50
+
+
+def tcp_notify_listener():
+    global lib
+    while True:
+        try:
+            if not lib or not hasattr(lib, "sock"):
+                time.sleep(0.2)
+                continue
+
+            sock = lib.sock
+            if not sock:
+                time.sleep(0.2)
+                continue
+
+            # Đọc 1 dòng từ server.exe
+            line = b''
+            while True:
+                ch = sock.recv(1)
+                if not ch:
+                    break
+                if ch == b'\n':
+                    break
+                if ch != b'\r':
+                    line += ch
+
+            if not line:
+                continue
+
+            msg = line.decode('utf-8', errors='ignore').strip()
+
+            # ===== ZALO NOTIFY =====
+            if msg == "[ZALO_NOTIFY]":
+                text = b''
+                while True:
+                    ch = sock.recv(1)
+                    if not ch:
+                        break
+                    if ch == b'\n':
+                        break
+                    if ch != b'\r':
+                        text += ch
+
+                content = text.decode('utf-8', errors='ignore')
+
+                notify = {
+                    "app": "Zalo",
+                    "content": content,
+                    "time": time.strftime("%H:%M:%S")
+                }
+
+                with zalo_lock:
+                    zalo_notifications.append(notify)
+                    if len(zalo_notifications) > MAX_ZALO_NOTIFY:
+                        zalo_notifications.pop(0)
+
+                print("[ZALO POPUP]", content.replace("\n", " | "))
+
+        except Exception as e:
+            time.sleep(0.5)
+            
 
 # ---------------- MODE MANAGER (chèn vào webapp.py, top-level) ----------------
 # modes: keys and human names
@@ -259,6 +328,7 @@ if lib:
         lib.GetProcessList.restype   = ctypes.c_char_p # (Nếu có dùng)
         lib.GetInstalledApps.restype = ctypes.c_char_p
         lib.GetDrives.restype        = ctypes.c_char_p
+        lib.LockServer.restype = None
         lib.GetSystemStats.restype   = ctypes.c_char_p
         lib.ExplorePath.argtypes     = [ctypes.c_char_p]
         lib.ExplorePath.restype      = ctypes.c_char_p
@@ -407,6 +477,8 @@ def ws_client_thread(conn, addr):
         while True:
             try:
                 msg = read_ws_message(conn)
+            
+            
             except ConnectionError:
                 break
             if not msg:
@@ -429,8 +501,11 @@ def ws_client_thread(conn, addr):
                     try:
                         with lib_lock:
                             ok = lib.ConnectToServer(target_ip, target_port)
+                            
                         if ok:
                             send_ws_message(conn, "Bridge OK")
+                            t = threading.Thread(target=tcp_notify_listener, daemon=True)
+                            t.start()
                         else:
                             send_ws_message(conn, "Bridge FAIL")
                     except Exception as e:
@@ -486,6 +561,253 @@ def wait_for_file(path, timeout=2.0, poll=0.05):
         time.sleep(poll)
     return False
 
+
+
+
+#_______________________ AI __________________
+# --- 1. CONFIG & GLOBALS CHO AI ---
+SUPERVISE_MODE = False
+ADMIN_ENCODING = None
+
+# Timer trackers
+last_seen_admin = None
+stranger_detect_start = None
+no_face_detect_start = None 
+last_stranger_save_time = 0
+
+FACE_LOG_DIR = os.path.join(PICTURE_DIR, "Face") # Tạo folder images/Face
+if not os.path.exists(FACE_LOG_DIR):
+    os.makedirs(FACE_LOG_DIR)
+    
+
+# Load ảnh Admin khi khởi động
+ADMIN_IMG_PATH = os.path.join(FACE_LOG_DIR, "admin_fixed.jpg")
+if os.path.exists(ADMIN_IMG_PATH):
+    try:
+        # 1. Đọc bằng OpenCV (C cực nhanh)
+        img_cv = cv2.imread(ADMIN_IMG_PATH)
+        
+        if img_cv is not None:
+            # 2. Chuyển BGR -> RGB (AI cần RGB)
+            # Numpy < 2.0 tự động xử lý bộ nhớ, không cần ép kiểu thủ công nữa
+            image_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+            
+            # 3. Đưa vào AI (Lấy encoding đầu tiên)
+            encodings = face_recognition.face_encodings(image_rgb)
+            if len(encodings) > 0:
+                ADMIN_ENCODING = encodings[0]
+                print(f"-> [AI] ✅ Đã nạp dữ liệu khuôn mặt Admin.")
+            else:
+                print(f"-> [AI] ⚠️ Không tìm thấy khuôn mặt trong ảnh.")
+    except Exception as e:
+        print(f"-> [AI] Lỗi: {e}")
+else:
+    print(f"-> [AI] Không thấy file ảnh Admin.")
+
+
+
+# --- HÀM ĐỌC ẢNH AN TOÀN (CHỐNG XUNG ĐỘT FILE) ---
+def read_safe_image(path, retries=3):
+    """
+    Cố gắng đọc file ảnh bằng cách copy ra file tạm trước.
+    Thử lại 'retries' lần nếu thất bại.
+    """
+    if not os.path.exists(path): return None
+    
+    for i in range(retries):
+        try:
+            # 1. Tạo tên file tạm để đọc (tránh đụng file gốc đang bị C++ ghi)
+            temp_read_path = path + ".read_tmp"
+            
+            # 2. Copy file gốc sang file tạm (Thao tác này cực nhanh)
+            shutil.copyfile(path, temp_read_path)
+            
+            # 3. Đọc từ file tạm bằng OpenCV
+            frame = cv2.imread(temp_read_path)
+            
+            # 4. Xóa file tạm ngay sau khi đọc xong
+            try: os.remove(temp_read_path)
+            except: pass
+            
+            # Nếu đọc thành công (không None, có dữ liệu) thì trả về ngay
+            if frame is not None and frame.size > 0:
+                return frame
+                
+        except Exception:
+            # Nếu lỗi (do file gốc đang bị khóa), chờ xíu rồi thử lại
+            time.sleep(0.02)
+            
+    return None
+
+
+# --- 2. HÀM XỬ LÝ AI TRÊN ẢNH ---
+def process_ai_frame(frame_bgr):
+    global stranger_detect_start, no_face_detect_start, last_stranger_save_time
+
+    now = time.time()
+    h_frame, w_frame, _ = frame_bgr.shape # Lấy kích thước khung hình
+
+    # --- CẤU HÌNH TỶ LỆ ---
+    SCALE = 0.5           
+    MULTIPLIER = int(1/SCALE) 
+
+    # ================= PREPROCESS =================
+    small = cv2.resize(frame_bgr, (0, 0), fx=SCALE, fy=SCALE)
+    rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+
+    face_locations = face_recognition.face_locations(rgb_small)
+    face_encodings = face_recognition.face_encodings(rgb_small, face_locations)
+
+    admin_found = False
+    stranger_found = False
+
+    # ================= DETECT & DRAW =================
+    for (top, right, bottom, left), enc in zip(face_locations, face_encodings):
+        top *= MULTIPLIER
+        right *= MULTIPLIER
+        bottom *= MULTIPLIER
+        left *= MULTIPLIER
+
+        name = "Stranger"
+        box_color = (0, 0, 255) # Đỏ mặc định cho người lạ
+
+        if ADMIN_ENCODING is not None:
+            matches = face_recognition.compare_faces([ADMIN_ENCODING], enc, tolerance=0.5)
+            if True in matches:
+                name = "Admin"
+                box_color = (0, 255, 0) # Xanh cho Admin
+                admin_found = True
+
+        if name == "Stranger":
+            stranger_found = True
+            # Logic lưu ảnh Stranger (Giữ nguyên, chỉ thu gọn để code dễ nhìn)
+            if now - last_stranger_save_time > 2:
+                try:
+                    c_top, c_bottom = max(0, top - 20), min(h_frame, bottom + 20)
+                    c_left, c_right = max(0, left - 20), min(w_frame, right + 20)
+                    crop = frame_bgr[c_top:c_bottom, c_left:c_right]
+                    if crop.size > 0:
+                        ts = time.strftime("%Y%m%d_%H%M%S")
+                        cv2.imwrite(os.path.join(FACE_LOG_DIR, f"stranger_{ts}.jpg"), crop)
+                        last_stranger_save_time = now
+                except: pass
+
+        # --- VẼ KHUNG FACE MẢNH VÀ ĐẸP HƠN ---
+        # Chỉ vẽ 4 góc hoặc khung mỏng (thickness=1)
+        cv2.rectangle(frame_bgr, (left, top), (right, bottom), box_color, 1)
+        
+        # Vẽ tên nhỏ gọn phía trên đầu
+        cv2.putText(frame_bgr, name, (left, top - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1, cv2.LINE_AA)
+
+    # ================= STATE MACHINE =================
+    should_lock = False
+    status_msg = "System Secure"
+    status_color = (0, 255, 0) # Xanh lá (BGR)
+    
+    # Biến tính phần trăm thời gian để vẽ thanh loading (nếu cần)
+    danger_percent = 0.0 
+
+    if admin_found:
+        stranger_detect_start = None
+        no_face_detect_start = None
+        status_msg = "Admin Active"
+        status_color = (0, 255, 0)
+
+    else:
+        if face_locations: 
+            no_face_detect_start = None
+            if stranger_found:
+                if stranger_detect_start is None: stranger_detect_start = now
+                t = now - stranger_detect_start
+                
+                # Logic đếm ngược Stranger (5s)
+                remain = 5 - t
+                danger_percent = min(t / 5.0, 1.0)
+                
+                if remain > 0:
+                    status_msg = f"Stranger Detected: {math.ceil(remain)}s"
+                    status_color = (0, 0, 255) # Đỏ
+                else:
+                    should_lock = True
+                    status_msg = "LOCKING..."
+        else:
+            if no_face_detect_start is None: no_face_detect_start = now
+            t = now - no_face_detect_start
+            
+            # Logic đếm ngược Vắng mặt (10s)
+            remain = 10 - t
+            danger_percent = min(t / 10.0, 1.0)
+
+            if remain > 0:
+                status_msg = f"No Face Detected: {math.ceil(remain)}s"
+                status_color = (0, 255, 255) # Vàng
+            else:
+                should_lock = True
+                status_msg = "LOCKING..."
+
+    # ================= ACTION =================
+    if should_lock and lib:
+        print("[AI] 🛑 LOCK ACTION TRIGGERED")
+        global SUPERVISE_MODE
+        SUPERVISE_MODE = False 
+        
+        # Gửi tin tắt nút
+        try:
+            with ws_clients_lock:
+                for c in ws_clients:
+                    try: send_ws_message(c, "AI_OFF")
+                    except: pass
+        except: pass
+
+        stop_current_mode()
+        time.sleep(1.0)
+        with lib_lock:
+            if hasattr(lib, "LockServer"): lib.LockServer()
+        
+        stranger_detect_start = None
+        no_face_detect_start = None
+
+    # ================= AESTHETIC HUD DRAWING (Giao diện đẹp) =================
+    # Tạo một vùng Background bán trong suốt ở giữa phía trên
+    if True: # Block này để gom code vẽ
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        thickness = 1
+        
+        # 1. Tính kích thước chữ để căn giữa
+        (text_w, text_h), baseline = cv2.getTextSize(status_msg, font, font_scale, thickness)
+        
+        # Tọa độ hộp (Padding rộng rãi chút)
+        pad_x = 20
+        pad_y = 10
+        box_w = text_w + (pad_x * 2)
+        box_h = text_h + (pad_y * 2)
+        
+        box_x = (w_frame - box_w) // 2
+        box_y = 20 # Cách mép trên 20px
+
+        # 2. Vẽ nền đen mờ (Overlay)
+        overlay = frame_bgr.copy()
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (20, 20, 20), -1)
+        
+        # Trộn màu (Alpha blending) để làm nền trong suốt 60%
+        alpha = 0.6
+        cv2.addWeighted(overlay, alpha, frame_bgr, 1 - alpha, 0, frame_bgr)
+
+        # 3. Vẽ thanh Loading cảnh báo (Nằm dưới đáy hộp)
+        if danger_percent > 0:
+            bar_w = int(box_w * danger_percent)
+            cv2.rectangle(frame_bgr, (box_x, box_y + box_h - 4), (box_x + bar_w, box_y + box_h), status_color, -1)
+        else:
+            # Nếu an toàn thì vẽ 1 line mỏng màu xanh cố định
+            cv2.rectangle(frame_bgr, (box_x, box_y + box_h - 2), (box_x + box_w, box_y + box_h), status_color, -1)
+
+        # 4. Vẽ chữ (Màu trắng, khử răng cưa)
+        text_x = box_x + pad_x
+        text_y = box_y + pad_y + text_h - 2
+        cv2.putText(frame_bgr, status_msg, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+    return frame_bgr
 
 def stop_current_mode():
     global current_mode, webcam_running, _stream_thread
@@ -790,6 +1112,7 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
     # --- Thay thế toàn bộ method do_GET bằng đoạn này ---
     def do_GET(self):
         global webcam_running, is_recording_webcam, is_recording_screen
+        global SUPERVISE_MODE, last_seen_admin
         
         if self.path == '/':
             # Chỉ định file cần mở là index.html trong thư mục templates
@@ -913,66 +1236,77 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             if lib:
                 try:
                     with lib_lock:
+                        # 1. Xóa file DB cũ nếu tồn tại (để đảm bảo không đọc lại file rác)
                         if os.path.exists(HISTORY_DB):
-                            os.remove(HISTORY_DB)
+                            try: os.remove(HISTORY_DB)
+                            except: pass
+                        
+                        # 2. Gọi DLL để lấy file mới từ Server
                         lib.GetNotificationHistory()
+                    
+                    # 3. Chờ file xuất hiện (Timeout 3s)
                     ok = wait_for_file(HISTORY_DB, timeout=3.0)
+                    
                     if ok and os.path.exists(HISTORY_DB):
-                        conn = sqlite3.connect(HISTORY_DB)
-                        cursor = conn.cursor()
-                        # Dùng cùng logic như main.py (giữ đơn giản) 
-                        try:
-                            cursor.execute("SELECT AppId, TimeCreated, Payload FROM Notification ORDER BY TimeCreated DESC LIMIT 200")
-                            rows = cursor.fetchall()
-                            for app_id, time_str, xml_str in rows:
-                                app_id = app_id or ""
-                                time_str = time_str or ""
-                                xml_str = xml_str or ""
+                        # --- [THÊM MỚI] DEBUG KÍCH THƯỚC FILE ---
+                        f_size = os.path.getsize(HISTORY_DB)
+                        print(f"[DEBUG] Notification DB size: {f_size} bytes")
+                        
+                        # Nếu file quá nhỏ (< 1KB) -> Có thể Server copy lỗi hoặc User chưa có thông báo
+                        if f_size < 1024:
+                            print("[DEBUG] File DB quá nhỏ, có thể rỗng.")
+                        else:
+                            # 4. Kết nối SQLite để đọc dữ liệu
+                            conn = sqlite3.connect(HISTORY_DB)
+                            cursor = conn.cursor()
+                            try:
+                                cursor.execute("SELECT AppId, TimeCreated, Payload FROM Notification ORDER BY TimeCreated DESC LIMIT 200")
+                                rows = cursor.fetchall()
+                                
+                                for app_id, time_str, xml_str in rows:
+                                    app_id = app_id or ""
+                                    time_str = time_str or ""
+                                    xml_str = xml_str or ""
 
-                                content_text = ""
-                                try:
-                                    # 1. Ưu tiên tìm thẻ <text> (Chuẩn của Windows Toast)
-                                    matches = re.findall(r'<text[^>]*>(.*?)</text>', xml_str)
+                                    content_text = ""
+                                    try:
+                                        # A. Ưu tiên tìm thẻ <text> (Chuẩn Toast Windows)
+                                        texts = re.findall(r'<text[^>]*>(.*?)</text>', xml_str)
+                                        
+                                        # B. Nếu Zalo dùng format lạ, lấy tất cả text nằm giữa > và <
+                                        if not texts:
+                                            raw_texts = re.findall(r'>([^<]+)<', xml_str)
+                                            # Lọc bỏ ký tự rác, chỉ lấy text có nội dung
+                                            texts = [t.strip() for t in raw_texts if len(t.strip()) > 1]
+
+                                        if texts:
+                                            content_text = " | ".join(texts)
+                                    except: pass
                                     
-                                    # 2. Nếu không thấy thẻ text, mới tìm kiểu chung chung
-                                    if not matches:
-                                        matches = re.findall(r'>([^<]{2,200})<', xml_str)
+                                    # Nếu vẫn rỗng
+                                    if not content_text: 
+                                        content_text = "(Nội dung ẩn hoặc hình ảnh)"
 
-                                    # Lọc bỏ các ký tự rác hoặc xuống dòng thừa
-                                    clean_texts = [m.strip() for m in matches if m.strip() and "{" not in m] 
-                                    
-                                    if clean_texts:
-                                        # Zalo/Fb thường dòng 1 là Tên người gửi, dòng 2 là Nội dung
-                                        content_text = " | ".join(clean_texts)
-                                except:
-                                    pass
-                                if not content_text:
-                                    clean_chars = "".join([c for c in xml_str if c.isprintable()])
-                                    if len(clean_chars) > 5:
-                                        content_text = "[RAW] " + clean_chars[:200]
-                                if not content_text:
-                                    content_text = "[Thông báo hệ thống / Không có nội dung]"
+                                    # Làm đẹp tên App
+                                    if "Zalo" in app_id: app_name = "Zalo"
+                                    elif "Chrome" in app_id: app_name = "Google Chrome"
+                                    elif "Explorer" in app_id: app_name = "System"
+                                    else: 
+                                        parts = app_id.split('.')
+                                        app_name = parts[-1] if parts else app_id
 
-                                if "Skype" in app_id:
-                                    app_name = "Skype"
-                                elif "Zalo" in app_id:
-                                    app_name = "Zalo"
-                                elif "Chrome" in app_id:
-                                    app_name = "Google Chrome"
-                                elif "Explorer" in app_id:
-                                    app_name = "Windows System"
-                                else:
-                                    parts = app_id.split('.')
-                                    app_name = parts[-1] if parts else app_id
+                                    data_list.append({
+                                        "app": app_name,
+                                        "time": time_str,
+                                        "content": content_text
+                                    })
+                            except Exception as sql_e:
+                                print("[HTTP] SQL Error:", sql_e)
+                            finally:
+                                conn.close()
+                    else:
+                        print("[HTTP] Không nhận được file history.db từ Server.")
 
-                                data_list.append({
-                                    "app": app_name,
-                                    "time": time_str,
-                                    "content": content_text
-                                })
-                        except Exception as e:
-                            print("[HTTP] Notification SQL error:", e)
-                        conn.close()
                 except Exception as e:
                     print("[HTTP] GetNotificationHistory error:", e)
 
@@ -982,6 +1316,15 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(data_list).encode())
             return
         
+        elif self.path == "/api/notify/zalo":
+            with zalo_lock:
+                data = list(zalo_notifications)
+
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+            return
         
         elif self.path == '/api/files/drives':
             entries = []
@@ -1052,53 +1395,41 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
         
         # --- Video stream MJPEG từ webcam.jpg ---
         elif self.path == '/video_feed':
-            # Stream MJPEG reading file webcam.jpg repeatedly; disable cache
             self.send_response(200)
             self.send_header('Content-type', 'multipart/x-mixed-replace; boundary=--jpgboundary')
-            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            self.send_header('Pragma', 'no-cache')
             self.end_headers()
-
             boundary = b"--jpgboundary\r\n"
-            img_path = WEBCAM_JPG  # ensure this is the same path DLL writes to
+            img_path = WEBCAM_JPG
 
-            try:
-                while True:
-                    if not os.path.exists(img_path):
-                        # if not ready, send a tiny placeholder or wait
+            while True:
+                try:
+                    # 1. Dùng hàm đọc an toàn thay vì cv2.imread trực tiếp
+                    frame = read_safe_image(img_path)
+
+                    if frame is None:
+                        # Nếu không đọc được, ngủ một chút rồi thử lại vòng sau
                         time.sleep(0.05)
                         continue
 
-                    try:
-                        # read file bytes atomically
-                        with open(img_path, "rb") as f:
-                            img = f.read()
-                        if not img:
-                            time.sleep(0.02)
-                            continue
-
+                    # 2. NẾU BẬT SUPERVISE -> CHẠY AI
+                    # (Bây giờ frame đã chắc chắn hợp lệ, AI sẽ chạy ổn định)
+                    if SUPERVISE_MODE:
+                        frame = process_ai_frame(frame)
+                    
+                    # 3. Encode và gửi ảnh (Code cũ giữ nguyên)
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    if ret:
+                        img_bytes = buffer.tobytes()
                         self.wfile.write(boundary)
                         self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(img)}\r\n\r\n".encode())
-                        self.wfile.write(img)
+                        self.wfile.write(f"Content-Length: {len(img_bytes)}\r\n\r\n".encode())
+                        self.wfile.write(img_bytes)
                         self.wfile.write(b"\r\n")
-                        # flush
-                        try:
-                            self.wfile.flush()
-                        except Exception:
-                            pass
-
-                        # small delay to avoid busy loop; adjust for fps
-                        time.sleep(0.05)
-                    except BrokenPipeError:
-                        # client disconnected
-                        break
-                    except Exception as e:
-                        print("[HTTP] video_feed read/write error:", e)
-                        time.sleep(0.1)
-                        continue
-            except Exception as e:
-                print("[HTTP] video_feed outer exception:", e)
+                    
+                    time.sleep(0.05) # ~15-20 FPS
+                except Exception as e:
+                    print("[Stream Error]", e)
+                    break
             return
         
         elif self.path == '/screen_feed':
@@ -1242,6 +1573,8 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b"NOT_RUNNING")
             return
         
+        
+        
         elif self.path == '/api/webcam/snapshot':
             saved_ok = False
             fname = ""
@@ -1342,6 +1675,32 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({"ok": ok}).encode())
+            return
+        
+        
+        elif self.path == '/api/webcam/supervise':
+            # 1. Đọc dữ liệu JSON từ Client gửi lên
+            length = int(self.headers.get('Content-Length', 0))
+            data = self.rfile.read(length) if length > 0 else b''
+            
+            enable_mode = False
+            try:
+                payload = json.loads(data.decode('utf-8'))
+                # Lấy giá trị enable (True/False) từ JS gửi lên
+                enable_mode = payload.get('enable', False) 
+            except: 
+                pass
+
+            global SUPERVISE_MODE
+            # 2. Cập nhật đúng theo yêu cầu (Thay vì luôn set True như cũ)
+            SUPERVISE_MODE = enable_mode 
+            
+            print(f"[AI] Supervise Mode set to: {SUPERVISE_MODE}")
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "status": SUPERVISE_MODE}).encode())
             return
         
         
