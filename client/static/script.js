@@ -159,6 +159,16 @@ function handleConnection() {
         };
 
         socket.onmessage = function(event) {
+            const msg = event.data;
+
+            // --- LOGIC XỬ LÝ BÁO ĐỘNG MỚI ---
+            if (msg.includes("ALARM:DANGER")) {
+                document.body.classList.add('alarm-active');
+                showToast("⚠️ CẢNH BÁO: PHÁT HIỆN NGƯỜI LẠ!", "error");
+            } 
+            else if (msg.includes("ALARM:SAFE") || msg.includes("AI_OFF")) {
+                document.body.classList.remove('alarm-active');
+    }
             // Python trả về kết quả kết nối TCP
             if (event.data.includes("Bridge OK") || event.data.includes("connected") || event.data.includes("OK")) {
                 showSuccess(targetIP, targetPort);
@@ -382,6 +392,8 @@ setInterval(() => {
 function goHome() {
     const appSection = document.getElementById('appSection');
     
+    document.body.classList.remove('alarm-active');
+
     // Gỡ bỏ class active -> Menu sẽ tự phóng to lại
     appSection.classList.remove('feature-active');
     
@@ -395,6 +407,8 @@ function goHome() {
 
 // 2. Cập nhật hàm switchMode
 function switchMode(mode) {
+    document.body.classList.remove('alarm-active');
+
     const appSection = document.getElementById('appSection');
     const container = document.getElementById('dynamicContent');
     
@@ -432,6 +446,11 @@ function renderContent(mode) {
         isWebcamRecording = false; 
         
         container.innerHTML = `
+            <div id="emergencyLockBtn" onclick="forceLockNow()">
+                🚫 KHÓA NGAY
+                <small style="font-size:0.8rem; font-weight:normal;">Phát hiện xâm nhập!</small>
+            </div>
+
             <div id="webcamFrame" class="cam-frame">
                 <div class="rec-indicator"><div class="rec-dot"></div> REC</div>
 
@@ -517,27 +536,33 @@ function renderContent(mode) {
         keylogLoad();
     }
 
-    else if (mode === 'notify') {
+    else if (mode === 'activity') { // Đổi tên từ notify -> activity
         container.innerHTML = `
             <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#a5b4fc;">🔔 Lịch sử Thông báo</h3>
-                    <button class="btn-nature" onclick="loadNotify()">Tải lại</button>
+                    <h3 style="margin:0; color:#f472b6;">🔐 Nhật ký Hoạt động</h3>
+                    <button class="btn-nature" onclick="loadActivity()">Làm mới</button>
                 </div>
                 <div style="flex:1; overflow-y:auto;">
                     <table class="nature-table">
                         <thead>
-                            <tr><th>App</th><th>Thời gian</th><th>Nội dung</th></tr>
+                            <tr>
+                                <th>Ứng dụng</th>
+                                <th>Tiêu đề cửa sổ</th>
+                                <th>Bắt đầu</th>
+                                <th>Thời lượng</th>
+                            </tr>
                         </thead>
-                        <tbody id="notifyBody">
-                            <tr><td colspan="3">Đang tải...</td></tr>
+                        <tbody id="activityBody">
+                            <tr><td colspan="4" style="text-align:center">Đang phân tích...</td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
         `;
-        loadNotify();
+        loadActivity(); // Gọi hàm mới
     }
+
     else if (mode === 'files') {
         container.innerHTML = `
             <div class="dash-card" style="display:flex; flex-direction:column; height:100%;">
@@ -792,32 +817,39 @@ function clearKeylog() {
 }
 
 // ==== NOTIFICATIONS ====
-function loadNotify() {
-    const tbody = document.getElementById('notifyBody');
+function loadActivity() {
+    const tbody = document.getElementById('activityBody');
     if (!tbody) return;
-    tbody.innerHTML = `<tr><td colspan="3">Đang tải...</td></tr>`;
-    fetch('/api/notify/list')
-        .then(r=>r.json())
+    
+    fetch('/api/activity/list')
+        .then(r => r.json())
         .then(list => {
             tbody.innerHTML = "";
             if (!list || list.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="3">Không có dữ liệu.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="4" style="text-align:center">Chưa có dữ liệu hoạt động.</td></tr>`;
                 return;
             }
-            list.forEach(n => {
+            list.forEach(item => {
+                // Nếu là App đang active thì tô màu xanh
+                const rowStyle = item.active ? "background: rgba(34, 197, 94, 0.1);" : "";
+                const durStyle = item.active ? "color: #4ade80; font-weight:bold;" : "color: #cbd5e1;";
+                
+                // Làm đẹp tên App (ví dụ chrome.exe -> Chrome)
+                let appName = item.app.replace(".exe", "");
+                appName = appName.charAt(0).toUpperCase() + appName.slice(1);
+
                 tbody.innerHTML += `
-                    <tr>
-                        <td>${n.app}</td>
-                        <td>${n.time}</td>
-                        <td>${n.content}</td>
+                    <tr style="${rowStyle}">
+                        <td style="font-weight:600; color:#e2e8f0;">${appName}</td>
+                        <td style="font-size:0.85rem; color:#94a3b8; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${item.title}">${item.title}</td>
+                        <td>${item.time}</td>
+                        <td style="${durStyle}">${item.duration}</td>
                     </tr>
                 `;
             });
-            logMsg(`Đã tải ${list.length} thông báo.`);
         })
-        .catch(()=> {
-            tbody.innerHTML = `<tr><td colspan="3" style="color:#fca5a5;">Lỗi API.</td></tr>`;
-            logMsg("Lỗi tải thông báo.");
+        .catch(() => {
+            tbody.innerHTML = `<tr><td colspan="4" style="color:#fca5a5; text-align:center">Lỗi kết nối Server.</td></tr>`;
         });
 }
 
@@ -1292,6 +1324,9 @@ function updateSnowVisuals() {
     if (snowLevel < 0) snowLevel = 0;
     if (snowLevel > 100) snowLevel = 100;
 
+    document.body.style.setProperty('--snow-level', snowLevel + '%');
+    document.body.style.setProperty('--snow-decimal', snowLevel / 100);
+    
     const opacity = snowLevel / 100;
     const ground = document.getElementById('groundSnow');
     const tree = document.getElementById('treeSnow');
@@ -1319,20 +1354,27 @@ function startMelting(isRain) {
 
     console.log(isRain ? "⛈️ Mưa to -> Rửa trôi tuyết!" : "☀️ Nắng lên -> Tuyết tan dần...");
 
+    // Nếu mưa -> Chắc chắn không còn là trạng thái "Tuyết phủ" tĩnh lặng nữa
+    if(isRain) {
+        document.body.classList.remove('is-snowing');
+    }
+
     meltingTimer = setInterval(() => {
         // Nếu hết tuyết thì dừng
         if (snowLevel <= 0) {
             clearInterval(meltingTimer);
             meltingTimer = null;
+            
+            // [QUAN TRỌNG] Khi tuyết tan sạch -> Gỡ class để Bụi cây xanh lại & Đom đóm bay ra
+            document.body.classList.remove('is-snowing');
             return;
         }
 
-        // Tốc độ tan: Mưa tan nhanh gấp 10 lần Nắng
         const meltRate = isRain ? 5.0 : 0.5; 
         snowLevel -= meltRate;
         updateSnowVisuals();
 
-    }, 200); // Cập nhật mỗi 200ms
+    }, 200);
 }
 
 // --- LOGIC RƠI QUÀ (MAGIC DROP) ---
@@ -1450,31 +1492,31 @@ function startSnow() {
     if (currentWeather !== WEATHER.CLEAR) return;
     if (giftTimer) { clearTimeout(giftTimer); giftTimer = null; }
 
-
     console.log("❄️ TUYẾT RƠI!");
     currentWeather = WEATHER.SNOW;
     
+    // [QUAN TRỌNG] Thêm class này để CSS Bụi rậm & Đom đóm nhận biết
+    document.body.classList.add('is-snowing'); 
+
     // 1. Dừng chế độ tan tuyết (nếu đang tan)
     if (meltingTimer) clearInterval(meltingTimer);
 
     // 2. Hiệu ứng tuyết rơi
     createSnow();
 
-    // 3. Tích tụ tuyết (Đợi 2s để tuyết rơi xuống đất rồi mới phủ)
+    // 3. Tích tụ tuyết
     setTimeout(() => {
         if (snowAccumulateTimer) clearInterval(snowAccumulateTimer);
         snowAccumulateTimer = setInterval(() => {
-            // Nếu bỗng dưng mưa -> Dừng tích tụ ngay
             if (currentWeather !== WEATHER.SNOW) {
                 clearInterval(snowAccumulateTimer);
                 return;
             }
-
             if (snowLevel < 100) {
-                snowLevel += 1; // Tăng dần
+                snowLevel += 1;
                 updateSnowVisuals();
             } else {
-                stopSnow(); // Phủ kín thì dừng rơi
+                stopSnow();
             }
         }, CFG.snowSpeed);
     }, 2000);
@@ -1483,14 +1525,23 @@ function startSnow() {
 function stopSnow() {
     console.log("🛑 Tuyết ngừng rơi.");
     currentWeather = WEATHER.CLEAR;
+    
     document.getElementById('snowContainer').style.display = 'none';
     if (snowAccumulateTimer) clearInterval(snowAccumulateTimer);
 
     // Logic sau khi tuyết ngừng:
-    // Nếu là Đêm -> Giữ nguyên tuyết.
-    // Nếu là Ngày -> Bắt đầu tan.
+    // Nếu là Đêm -> Giữ nguyên tuyết và class is-snowing để đom đóm KHÔNG bay ra
+    // Nếu là Ngày -> Bắt đầu tan và xóa class is-snowing
+    
     if (!document.body.classList.contains('dark-mode')) {
         startMelting(false); // Tan chậm
+        document.body.classList.remove('is-snowing'); // Gỡ trạng thái tuyết
+    } else {
+        // Nếu là ĐÊM, ta vẫn giữ class 'is-snowing' nếu tuyết còn dày
+        // Để đom đóm không bay ra trên nền tuyết trắng
+        if(snowLevel <= 0) {
+             document.body.classList.remove('is-snowing');
+        }
     }
     
     scheduleNextWeather();
@@ -2007,34 +2058,46 @@ function scheduleRandomNightEvent() {
 
 // --- 1. HIỆU ỨNG ĐOM ĐÓM ---
 function spawnFireflies() {
+    // Nếu đang có tuyết (class is-snowing) thì không sinh đom đóm
+    if (document.body.classList.contains('is-snowing')) return;
+
     let container = document.querySelector('.firefly-container');
+    // Nếu chưa có container thì tạo mới
     if (!container) {
         container = document.createElement('div');
         container.className = 'firefly-container';
+        // Chèn vào body hoặc div bush-container nếu muốn nó nằm sau dashboard
+        // Ở đây ta chèn vào body cho dễ quản lý
         document.body.appendChild(container);
     }
 
-    // [TĂNG SỐ LƯỢNG] Cũ: 5-12 -> Mới: 12-25 con
-    const count = Math.floor(Math.random() * 14) + 12;
+    // Số lượng đom đóm ngẫu nhiên từ 15 đến 25 con
+    const count = Math.floor(Math.random() * 10) + 15;
     
     for (let i = 0; i < count; i++) {
         const fly = document.createElement('div');
         fly.classList.add('firefly');
         
+        // Vị trí xuất phát
         fly.style.left = Math.random() * 100 + '%';
-        fly.style.bottom = Math.random() * 35 + '%'; // Bay cao hơn một chút (tầm 35% dưới)
+        fly.style.bottom = Math.random() * 50 + '%'; // Bay ở nửa dưới màn hình
 
-        // Random chuyển động bay lượn
-        const moveX = (Math.random() * 250 - 125) + 'px'; // Phạm vi bay rộng hơn xíu
-        const moveY = (Math.random() * 120 - 60) + 'px';
+        // CẤU HÌNH CHO CSS MỚI:
+        // Random khoảng cách bay (x: ngang, y: dọc)
+        const moveX = (Math.random() * 200 - 100) + 'px'; // Bay qua trái/phải 100px
+        const moveY = (Math.random() * 150 - 75) + 'px';  // Bay lên/xuống 75px
+        
         fly.style.setProperty('--move-x', moveX);
         fly.style.setProperty('--move-y', moveY);
         
-        fly.style.setProperty('--fly-duration', (Math.random() * 6 + 6) + 's'); // 6-12s
-        fly.style.setProperty('--flash-duration', (Math.random() * 2.5 + 1.5) + 's'); // 1.5-4s
+        // Random thời gian bay (fly) và thời gian chớp tắt (flash)
+        fly.style.setProperty('--fly-duration', (Math.random() * 10 + 10) + 's'); // 10s - 20s (Bay chậm)
+        fly.style.setProperty('--flash-duration', (Math.random() * 3 + 2) + 's'); // 2s - 5s (Nhấp nháy)
 
         container.appendChild(fly);
-        setTimeout(() => { fly.remove(); }, 18000); // Tăng thời gian sống lên 18s
+        
+        // Đom đóm sống lâu hơn (20s) rồi tự hủy để tạo lứa mới
+        setTimeout(() => { fly.remove(); }, 20000); 
     }
 }
 
@@ -2052,34 +2115,53 @@ function spawnShootingStars(amount) {
             const star = document.createElement('div');
             star.classList.add('shooting-star-v2');
 
-            // 1. Tính toán vị trí xuất phát (Bên trái hoặc phía trên)
-            // startX từ -10% (ngoài mép trái) đến 80% màn hình
-            const startXVal = (Math.random() * 90 - 10); 
-            star.style.setProperty('--start-x', startXVal + '%');
+            // 1. Điểm xuất phát (Start X)
+            // Random từ 0% đến 100% chiều ngang màn hình
+            const startX_VW = Math.random() * 100; 
+            star.style.setProperty('--start-x', startX_VW + 'vw');
 
-            // 2. Tính toán khoảng cách bay ngang (Luôn dương để bay sang phải)
-            // Bay thêm từ 30vw đến 60vw sang phải
-            const destDistVal = (Math.random() * 30 + 30);
-            star.style.setProperty('--dest-dist', destDistVal + 'vw');
+            // 2. Quãng đường bay (Delta)
+            // Bay chéo xuống góc phải:
+            // - Ngang (tx): Bay thêm 20vw đến 50vw sang phải
+            // - Dọc (ty): Bay xuống 100vh đến 150vh (để chắc chắn qua khỏi màn hình)
+            const tx_VW = Math.random() * 30 + 20; 
+            const ty_VH = Math.random() * 50 + 100; 
+
+            star.style.setProperty('--tx', tx_VW + 'vw');
+            star.style.setProperty('--ty', ty_VH + 'vh');
+
+            // 3. Tính góc bay (Angle)
+            // Đổi đơn vị vw/vh sang pixel tương đối để tính góc chính xác
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+            const deltaX_px = (tx_VW / 100) * winW;
+            const deltaY_px = (ty_VH / 100) * winH;
             
-            // 3. [CHẬM LẠI] Thời gian bay: 2.5s đến 4.5s (Cũ là 1-2s)
-            const durationSec = (Math.random() * 2 + 2.5);
+            // Atan2 tính góc radian, đổi sang độ
+            const angleDeg = Math.atan2(deltaY_px, deltaX_px) * (180 / Math.PI);
+            star.style.setProperty('--angle', angleDeg + 'deg');
+
+            // 4. Thời gian bay
+            const durationSec = Math.random() * 1.5 + 1.5; // 1.5s - 3s
             star.style.setProperty('--fall-duration', durationSec + 's');
 
             container.appendChild(star);
 
-            // 4. Lên lịch tạo hiệu ứng LẤP LÁNH khi sao bay xong
+            // 5. Hiệu ứng nổ (Sparkle) tại điểm kết thúc
             setTimeout(() => {
-                // Ước lượng vị trí kết thúc để đặt hiệu ứng lấp lánh
-                // Vị trí X cuối = X đầu + khoảng cách bay
-                const endXEstimate = startXVal + destDistVal;
-                // Vị trí Y cuối = khoảng 85-90% chiều cao màn hình (gần đáy)
-                spawnSparkle(endXEstimate + '%', '85%');
+                // Tính điểm kết thúc dự kiến để tạo đốm sáng
+                // Điểm cuối = StartX + Quãng đường bay
+                const endX_Final = startX_VW + tx_VW; 
                 
-                star.remove(); // Xóa sao băng
-            }, durationSec * 1000 - 200); // Kích hoạt sớm 200ms trước khi sao biến mất hẳn cho mượt
+                // Chỉ nổ nếu điểm rơi nằm trong màn hình (hoặc gần mép)
+                if(endX_Final < 120) { 
+                    spawnSparkle(endX_Final + 'vw', '95vh'); // Nổ ở gần đáy
+                }
+                
+                star.remove(); 
+            }, durationSec * 1000); 
 
-        }, Math.random() * 3000); // Rải rác trong 3 giây
+        }, Math.random() * 2000); // Xuất hiện rải rác
     }
 }
 
@@ -2094,6 +2176,49 @@ function spawnSparkle(x, y) {
     // Tự xóa sau khi animation kết thúc (0.8s)
     setTimeout(() => sparkle.remove(), 800);
 }
+
+
+function forceLockNow() {
+    // 1. Tắt báo động ngay cho đỡ nhức mắt
+    document.body.classList.remove('alarm-active');
+    
+    // 2. Gửi lệnh khóa máy chủ
+    // Dùng API custom power hoặc gọi hàm lock của Webapp
+    // Vì ta chưa có API lock riêng, ta dùng API power action 'lock' (nếu bạn đã cài)
+    // Hoặc gọi API LockServer có sẵn trong lib.
+    
+    // Cách nhanh nhất: Gửi lệnh qua WebSocket (nếu Webapp hỗ trợ) hoặc dùng API power
+    // Ở đây ta dùng cách gửi lệnh LockServer thông qua logic "Lock" của DLL
+    // Nhưng đơn giản nhất là gọi stop supervise trước để tránh loop
+    toggleSupervise(); // Tắt AI
+
+    // Gọi API Shutdown/Lock (Ở đây giả sử ta dùng logic Shutdown làm mẫu, 
+    // nhưng đúng ra nên thêm API /api/lock trong webapp.py nếu chưa có)
+    
+    // Tạm thời ta dùng API Custom Lock Server
+    // Bạn cần đảm bảo trong webapp.py -> do_POST có xử lý '/api/lock'
+    // Nếu chưa có, hãy dùng API Shutdown cho ngầu:
+    // fetch('/api/power', {method:'POST', body:JSON.stringify({action:'lock'})});
+    
+    // Để an toàn, ta gọi hàm LockServer thông qua Python Bridge bằng cách gửi lệnh text
+    // (Nếu bạn chưa implement API Lock riêng).
+    
+    // GIẢI PHÁP TẠM: Gửi lệnh custom qua socket nếu Webapp hỗ trợ
+    // Hoặc thêm đoạn này vào webapp.py -> do_POST:
+    /*
+    elif self.path == '/api/lock':
+        if lib: lib.LockServer()
+        self.send_response(200); self.end_headers(); self.wfile.write(b"OK")
+    */
+    
+    // Nếu chưa có, ta sẽ gọi API Stop Webcam và báo người dùng
+    fetch('/api/webcam/stop', {method:'POST'});
+    alert("Đã gửi lệnh khóa khẩn cấp!");
+    
+    // Gửi tín hiệu đặc biệt qua WS nếu Webapp lắng nghe
+    if(socket) socket.send("LOCK_NOW"); 
+}
+
 
 // Bắt đầu chu trình sau 2 giây
 setTimeout(scheduleNextWeather, 2000);

