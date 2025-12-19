@@ -1,5 +1,9 @@
-numpy
+# Xử lý ma trận và tính toán (Ghim bản dưới 2.0 để tránh lỗi xung đột)
+numpy<2.0.0
+
+# Xử lý ảnh và Webcam (OpenCV)
 opencv-python
-cmake
-dlib
+
+# Nhận diện khuôn mặt (Tính năng AI)
+# Lưu ý: Thư viện này phụ thuộc vào 'dlib'
 face_recognition
