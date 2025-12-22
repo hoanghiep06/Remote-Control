@@ -10,6 +10,7 @@
 
 Hệ thống cho phép **Administrator** kiểm soát, giám sát tài nguyên và thao tác dữ liệu trên **Target Machine** theo thời gian thực (**Real-time**) thông qua giao thức **TCP/IP** được tối ưu hóa độ trễ.
 
+LINK TỔNG HỢP ĐỒ ÁN: https://drive.google.com/drive/folders/19uJcW1mtf-5gq_rPJk1UURX8nxuQ1P8z?usp=sharing
 ---
 
 ## 🏗️ Kiến trúc Hệ thống (System Architecture)
