@@ -10,7 +10,7 @@
 
 Hệ thống cho phép **Administrator** kiểm soát, giám sát tài nguyên và thao tác dữ liệu trên **Target Machine** theo thời gian thực (**Real-time**) thông qua giao thức **TCP/IP** được tối ưu hóa độ trễ.
 
-LINK TỔNG HỢP ĐỒ ÁN: https://drive.google.com/drive/folders/19uJcW1mtf-5gq_rPJk1UURX8nxuQ1P8z?usp=sharing
+[![Google Drive](https://img.shields.io/badge/Google%20Drive-Tổng%20Hợp%20Đồ%20Án-4285F4?style=for-the-badge&logo=googledrive&logoColor=white)](https://drive.google.com/drive/folders/19uJcW1mtf-5gq_rPJk1UURX8nxuQ1P8z?usp=sharing)
 ---
 
 ## 🏗️ Kiến trúc Hệ thống (System Architecture)
